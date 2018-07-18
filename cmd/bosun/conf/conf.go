@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Azure/azure-sdk-for-go/services/preview/monitor/mgmt/2018-03-01/insights"
 	"github.com/influxdata/influxdb/client/v2"
 
 	"bosun.org/cmd/bosun/conf/template"
@@ -78,6 +79,7 @@ type SystemConfProvider interface {
 	GetGraphiteContext() graphite.Context
 	GetInfluxContext() client.HTTPConfig
 	GetElasticContext() expr.ElasticHosts
+	GetAzureMonitorContext() insights.MetricsClient
 	AnnotateEnabled() bool
 
 	MakeLink(string, *url.Values) string

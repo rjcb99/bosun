@@ -3,13 +3,18 @@ package conf
 import (
 	"bytes"
 	"fmt"
+	"log"
 	"net/http"
+	"net/http/httputil"
 	"net/url"
 	"time"
 
 	"bosun.org/cmd/bosun/expr"
 	"bosun.org/graphite"
 	"bosun.org/opentsdb"
+	"github.com/Azure/azure-sdk-for-go/services/preview/monitor/mgmt/2018-03-01/insights"
+	"github.com/Azure/go-autorest/autorest"
+	"github.com/Azure/go-autorest/autorest/azure/auth"
 	"github.com/BurntSushi/toml"
 	"github.com/influxdata/influxdb/client/v2"
 )
@@ -44,10 +49,11 @@ type SystemConf struct {
 
 	ExampleExpression string
 
-	OpenTSDBConf OpenTSDBConf
-	GraphiteConf GraphiteConf
-	InfluxConf   InfluxConf
-	ElasticConf  map[string]ElasticConf
+	OpenTSDBConf     OpenTSDBConf
+	GraphiteConf     GraphiteConf
+	InfluxConf       InfluxConf
+	ElasticConf      map[string]ElasticConf
+	AzureMonitorConf AzureMonitorConf
 
 	AnnotateConf AnnotateConf
 
@@ -67,12 +73,13 @@ type SystemConf struct {
 // and the parse errors can be thrown for query functions that are used when the backend
 // is not enabled
 type EnabledBackends struct {
-	OpenTSDB bool
-	Graphite bool
-	Influx   bool
-	Elastic  bool
-	Logstash bool
-	Annotate bool
+	OpenTSDB     bool
+	Graphite     bool
+	Influx       bool
+	Elastic      bool
+	Logstash     bool
+	Annotate     bool
+	AzureMonitor bool
 }
 
 // EnabledBackends returns and EnabledBackends struct which contains fields
@@ -84,6 +91,7 @@ func (sc *SystemConf) EnabledBackends() EnabledBackends {
 	b.Influx = sc.InfluxConf.URL != ""
 	b.Elastic = len(sc.ElasticConf["default"].Hosts) != 0
 	b.Annotate = len(sc.AnnotateConf.Hosts) != 0
+	b.AzureMonitor = sc.AzureMonitorConf.ClientId != ""
 	return b
 }
 
@@ -136,6 +144,14 @@ type ElasticConf struct {
 	Hosts         []string
 	SimpleClient  bool
 	ClientOptions ESClientOptions
+}
+
+// AzureConf contains configuration for an Azure metrics
+type AzureMonitorConf struct {
+	SubscriptionId string
+	TenantId       string
+	ClientId       string
+	ClientSecret   string
 }
 
 // InfluxConf contains configuration for an influx host that Bosun can query
@@ -538,6 +554,49 @@ func (sc *SystemConf) GetInfluxContext() client.HTTPConfig {
 // needed to run Elastic queries.
 func (sc *SystemConf) GetElasticContext() expr.ElasticHosts {
 	return parseESConfig(sc)
+}
+
+// GetAzureMonitorContext returns a Azure Monitor API context which
+// contains the information needs to query the azure API
+func (sc *SystemConf) GetAzureMonitorContext() insights.MetricsClient {
+	c := insights.NewMetricsClient(sc.AzureMonitorConf.SubscriptionId)
+	c.RequestInspector = LogRequest()
+	c.ResponseInspector = LogResponse()
+	ccc := auth.NewClientCredentialsConfig(sc.AzureMonitorConf.ClientId, sc.AzureMonitorConf.ClientSecret, sc.AzureMonitorConf.TenantId)
+	at, err := ccc.Authorizer()
+	if err != nil {
+		log.Fatal("azure conf: ", err)
+	}
+	c.Authorizer = at
+	return c
+}
+
+func LogRequest() autorest.PrepareDecorator {
+	return func(p autorest.Preparer) autorest.Preparer {
+		return autorest.PreparerFunc(func(r *http.Request) (*http.Request, error) {
+			r, err := p.Prepare(r)
+			if err != nil {
+				log.Println(err)
+			}
+			dump, _ := httputil.DumpRequestOut(r, true)
+			log.Println(string(dump))
+			return r, err
+		})
+	}
+}
+
+func LogResponse() autorest.RespondDecorator {
+	return func(p autorest.Responder) autorest.Responder {
+		return autorest.ResponderFunc(func(r *http.Response) error {
+			err := p.Respond(r)
+			if err != nil {
+				log.Println(err)
+			}
+			dump, _ := httputil.DumpResponse(r, true)
+			log.Println(string(dump))
+			return err
+		})
+	}
 }
 
 // AnnotateEnabled returns if annotations have been enabled or not

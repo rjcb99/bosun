@@ -20,6 +20,7 @@ import (
 	"bosun.org/models"
 	"bosun.org/opentsdb"
 	"bosun.org/slog"
+	"github.com/Azure/azure-sdk-for-go/services/preview/monitor/mgmt/2018-03-01/insights"
 	"github.com/MiniProfiler/go/miniprofiler"
 	"github.com/influxdata/influxdb/client/v2"
 )
@@ -50,6 +51,7 @@ type Backends struct {
 	ElasticHosts    ElasticHosts
 	InfluxConfig    client.HTTPConfig
 	ElasticConfig   ElasticConfig
+	AzureMonitor    insights.MetricsClient
 }
 
 type BosunProviders struct {
