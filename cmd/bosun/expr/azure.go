@@ -16,7 +16,7 @@ import (
 // Functions for Querying Azure Montior
 var AzureMonitor = map[string]parse.Func{
 	"az": {
-		Args:   []models.FuncType{models.TypeString, models.TypeString, models.TypeString, models.TypeString, models.TypeString, models.TypeString, models.TypeString, models.TypeString},
+		Args:   []models.FuncType{models.TypeString, models.TypeString, models.TypeString, models.TypeString, models.TypeString, models.TypeString, models.TypeString, models.TypeString, models.TypeString},
 		Return: models.TypeSeriesSet,
 		Tags:   tagFirst, //TODO: Appropriate tags func
 		F:      AzureQuery,
@@ -31,10 +31,6 @@ var AzureMonitor = map[string]parse.Func{
 
 // Reference for supported metrics: https://docs.microsoft.com/en-us/azure/monitoring-and-diagnostics/monitoring-supported-metrics
 
-// TODO handling multi-dimensional metrics?
-// - Should be in metadata field, maybe need to make a thing that gets metric defintions and caches them so we now what the
-//    tags keys are before getting results ...
-
 // TODO Handling multiple resources
 // - Given a metric and resource group, get the values for each object of ... the same type? and then tag them as such
 // - Like the above, but gets all resources groups and all the objects in each resource group
@@ -43,6 +39,10 @@ var AzureMonitor = map[string]parse.Func{
 // - I'm not sure all aggregations are available for all metrics, need to explore
 
 // TODO Auto timegrain/interval: Func that decides the timegrain based on the duration of the span of time between start and end
+
+// TODO Cache
+// - Cache for time series queries
+// - Cache for MetricDefintion data - probably longer lived
 
 const azTimeFmt = "2006-01-02T15:04:05"
 
@@ -68,14 +68,21 @@ func AzureMetricDefinitions(e *State, T miniprofiler.Timer, namespace, metric, r
 		for _, x := range *def.SupportedAggregationTypes {
 			agtypes = append(agtypes, fmt.Sprintf("%s", x))
 		}
-		fmt.Println(*def.Name.LocalizedValue, strings.Join(agtypes, ", "))
+		dims := []string{}
+		if def.Dimensions != nil {
+			for _, x := range *def.Dimensions {
+				dims = append(dims, fmt.Sprintf("%s", *x.Value))
+			}
+		}
+		fmt.Println(*def.Name.LocalizedValue, strings.Join(dims, ", "), strings.Join(agtypes, ", "))
 
 	}
 	return
 }
 
-// az("Microsoft.Compute/virtualMachines", "Percentage CPU", "SRE-RSG", "SRE-Linux-Jump", "agtype" "PT5M", "10m", "")
-func AzureQuery(e *State, T miniprofiler.Timer, namespace, metric, rsg, resource, agtype, interval, sdur, edur string) (r *Results, err error) {
+// az("Microsoft.Compute/virtualMachines", "Percentage CPU", "SRE-RSG", "SRE-Linux-Jump", "avg" "PT5M", "1h", "")
+// az("Microsoft.Compute/virtualMachines", "Per Disk Read Bytes/sec", "SlotId", "SRE-RSG", "SRE-Linux-Jump", "max", "PT5M", "1h", "")
+func AzureQuery(e *State, T miniprofiler.Timer, namespace, metric, tagKeysCSV, rsg, resource, agtype, interval, sdur, edur string) (r *Results, err error) {
 	c := e.Backends.AzureMonitor.MetricsClient
 	// TODO fix context
 	ctx := context.Background()
@@ -95,6 +102,15 @@ func AzureQuery(e *State, T miniprofiler.Timer, namespace, metric, rsg, resource
 	st := e.now.Add(time.Duration(-sd))
 	en := e.now.Add(time.Duration(-ed))
 
+	filter := ""
+	if tagKeysCSV != "" {
+		filters := []string{}
+		tagKeys := strings.Split(tagKeysCSV, ",")
+		for _, k := range tagKeys {
+			filters = append(filters, fmt.Sprintf("%s eq '*'", k))
+		}
+		filter = strings.Join(filters, " and ")
+	}
 	var tg *string
 	if interval != "" {
 		tg = &interval
@@ -112,7 +128,7 @@ func AzureQuery(e *State, T miniprofiler.Timer, namespace, metric, rsg, resource
 		aggLong,
 		nil,
 		"asc",
-		"",
+		filter,
 		insights.Data,
 		namespace)
 	if err != nil {
@@ -124,10 +140,18 @@ func AzureQuery(e *State, T miniprofiler.Timer, namespace, metric, rsg, resource
 			if tsContainer.Timeseries == nil {
 				continue
 			}
-			series := make(Series)
 			for _, dataContainer := range *tsContainer.Timeseries {
 				if dataContainer.Data == nil {
 					continue
+				}
+				series := make(Series)
+				tags := make(opentsdb.TagSet)
+				if dataContainer.Metadatavalues != nil {
+					for _, md := range *dataContainer.Metadatavalues {
+						if md.Name != nil && md.Name.Value != nil && md.Value != nil {
+							tags[*md.Name.Value] = *md.Value
+						} // TODO: Else?
+					}
 				}
 				for _, mValue := range *dataContainer.Data {
 					exValue := AzureExtractMetricValue(&mValue, aggLong)
@@ -135,12 +159,12 @@ func AzureQuery(e *State, T miniprofiler.Timer, namespace, metric, rsg, resource
 						series[mValue.TimeStamp.ToTime()] = *exValue
 					}
 				}
+				r.Results = append(r.Results, &Result{
+					Value: series,
+					Group: tags,
+				})
 			}
-			tags := make(opentsdb.TagSet)
-			r.Results = append(r.Results, &Result{
-				Value: series,
-				Group: tags,
-			})
+
 		}
 	}
 
