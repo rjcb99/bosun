@@ -558,17 +558,19 @@ func (sc *SystemConf) GetElasticContext() expr.ElasticHosts {
 
 // GetAzureMonitorContext returns a Azure Monitor API context which
 // contains the information needs to query the azure API
-func (sc *SystemConf) GetAzureMonitorContext() insights.MetricsClient {
-	c := insights.NewMetricsClient(sc.AzureMonitorConf.SubscriptionId)
-	c.RequestInspector = LogRequest()
-	c.ResponseInspector = LogResponse()
+func (sc *SystemConf) GetAzureMonitorContext() (az expr.AzureMonitorClients) {
+	az.MetricsClient = insights.NewMetricsClient(sc.AzureMonitorConf.SubscriptionId)
+	az.MetricDefinitionsClient = insights.NewMetricDefinitionsClient(sc.AzureMonitorConf.SubscriptionId)
+
+	az.MetricsClient.RequestInspector, az.MetricDefinitionsClient.RequestInspector = LogRequest(), LogRequest()
+	az.MetricsClient.ResponseInspector, az.MetricDefinitionsClient.ResponseInspector = LogResponse(), LogResponse()
 	ccc := auth.NewClientCredentialsConfig(sc.AzureMonitorConf.ClientId, sc.AzureMonitorConf.ClientSecret, sc.AzureMonitorConf.TenantId)
 	at, err := ccc.Authorizer()
 	if err != nil {
 		log.Fatal("azure conf: ", err)
 	}
-	c.Authorizer = at
-	return c
+	az.MetricsClient.Authorizer, az.MetricDefinitionsClient.Authorizer = at, at
+	return
 }
 
 func LogRequest() autorest.PrepareDecorator {

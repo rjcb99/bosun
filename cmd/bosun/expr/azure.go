@@ -3,6 +3,7 @@ package expr
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"bosun.org/cmd/bosun/expr/parse"
@@ -15,10 +16,16 @@ import (
 // Functions for Querying Azure Montior
 var AzureMonitor = map[string]parse.Func{
 	"az": {
-		Args:   []models.FuncType{models.TypeString, models.TypeString, models.TypeString, models.TypeString, models.TypeString, models.TypeString},
+		Args:   []models.FuncType{models.TypeString, models.TypeString, models.TypeString, models.TypeString, models.TypeString, models.TypeString, models.TypeString, models.TypeString},
 		Return: models.TypeSeriesSet,
-		Tags:   tagFirst,
+		Tags:   tagFirst, //TODO: Appropriate tags func
 		F:      AzureQuery,
+	},
+	"azmd": {
+		Args:   []models.FuncType{models.TypeString, models.TypeString, models.TypeString, models.TypeString},
+		Return: models.TypeSeriesSet,
+		Tags:   tagFirst, //TODO: Appropriate tags func
+		F:      AzureMetricDefinitions,
 	},
 }
 
@@ -35,13 +42,41 @@ var AzureMonitor = map[string]parse.Func{
 // TODO Aggregation types?
 // - I'm not sure all aggregations are available for all metrics, need to explore
 
-// TODO Timegrain options
+// TODO Auto timegrain/interval: Func that decides the timegrain based on the duration of the span of time between start and end
 
 const azTimeFmt = "2006-01-02T15:04:05"
 
-// az("Microsoft.Compute/virtualMachines", "Percentage CPU", "SRE-RSG", "SRE-Linux-Jump", "25m", "")
-func AzureQuery(e *State, T miniprofiler.Timer, namespace, metric, rsg, resource, sdur, edur string) (r *Results, err error) {
-	c := e.Backends.AzureMonitor
+func azResourceURI(subscription, resourceGrp, Namespace, Resource string) string {
+	return fmt.Sprintf("/subscriptions/%s/resourceGroups/%s/providers/%s/%s", subscription, resourceGrp, Namespace, Resource)
+}
+
+func AzureMetricDefinitions(e *State, T miniprofiler.Timer, namespace, metric, rsg, resource string) (r *Results, err error) {
+	c := e.Backends.AzureMonitor.MetricDefinitionsClient
+	// TODO fix context
+	ctx := context.Background()
+	r = new(Results)
+
+	defs, err := c.List(ctx, azResourceURI(c.SubscriptionID, rsg, namespace, resource), namespace)
+	if err != nil {
+		return
+	}
+	if defs.Value == nil {
+		return r, fmt.Errorf("No metric definitions in response")
+	}
+	for _, def := range *defs.Value {
+		agtypes := []string{}
+		for _, x := range *def.SupportedAggregationTypes {
+			agtypes = append(agtypes, fmt.Sprintf("%s", x))
+		}
+		fmt.Println(*def.Name.LocalizedValue, strings.Join(agtypes, ", "))
+
+	}
+	return
+}
+
+// az("Microsoft.Compute/virtualMachines", "Percentage CPU", "SRE-RSG", "SRE-Linux-Jump", "agtype" "PT5M", "10m", "")
+func AzureQuery(e *State, T miniprofiler.Timer, namespace, metric, rsg, resource, agtype, interval, sdur, edur string) (r *Results, err error) {
+	c := e.Backends.AzureMonitor.MetricsClient
 	// TODO fix context
 	ctx := context.Background()
 	r = new(Results)
@@ -60,35 +95,44 @@ func AzureQuery(e *State, T miniprofiler.Timer, namespace, metric, rsg, resource
 	st := e.now.Add(time.Duration(-sd))
 	en := e.now.Add(time.Duration(-ed))
 
-	//tg := "PT1M"
-	uri := fmt.Sprintf("/subscriptions/%s/resourceGroups/%s/providers/%s/%s", c.SubscriptionID, rsg, namespace, resource)
-	z, err := c.List(ctx, uri,
+	var tg *string
+	if interval != "" {
+		tg = &interval
+	}
+
+	aggLong, err := AzureShortAggToLong(agtype)
+	if err != nil {
+		return
+	}
+
+	resp, err := c.List(ctx, azResourceURI(c.SubscriptionID, rsg, namespace, resource),
 		fmt.Sprintf("%s/%s", st.Format(azTimeFmt), en.Format(azTimeFmt)),
-		nil,
+		tg,
 		metric,
-		"Average",
+		aggLong,
 		nil,
 		"asc",
 		"",
 		insights.Data,
 		namespace)
 	if err != nil {
-		return nil, err
+		return
 	}
 	// Optional todo capture X-Ms-Ratelimit-Remaining-Subscription-Reads
-	if z.Value != nil {
-		for _, val := range *z.Value {
-			if val.Timeseries == nil {
+	if resp.Value != nil {
+		for _, tsContainer := range *resp.Value {
+			if tsContainer.Timeseries == nil {
 				continue
 			}
 			series := make(Series)
-			for _, y := range *val.Timeseries {
-				if y.Data == nil {
+			for _, dataContainer := range *tsContainer.Timeseries {
+				if dataContainer.Data == nil {
 					continue
 				}
-				for _, w := range *y.Data {
-					if w.Average != nil {
-						series[w.TimeStamp.ToTime()] = *w.Average
+				for _, mValue := range *dataContainer.Data {
+					exValue := AzureExtractMetricValue(&mValue, aggLong)
+					if exValue != nil && mValue.TimeStamp != nil {
+						series[mValue.TimeStamp.ToTime()] = *exValue
 					}
 				}
 			}
@@ -101,4 +145,37 @@ func AzureQuery(e *State, T miniprofiler.Timer, namespace, metric, rsg, resource
 	}
 
 	return
+}
+
+type AzureMonitorClients struct {
+	MetricsClient           insights.MetricsClient
+	MetricDefinitionsClient insights.MetricDefinitionsClient
+}
+
+func AzureExtractMetricValue(mv *insights.MetricValue, field string) (v *float64) {
+	switch field {
+	case string(insights.Average), "":
+		v = mv.Average
+	case string(insights.Minimum):
+		v = mv.Minimum
+	case string(insights.Maximum):
+		v = mv.Maximum
+	case string(insights.Total):
+		v = mv.Total
+	}
+	return
+}
+
+func AzureShortAggToLong(agtype string) (string, error) {
+	switch agtype {
+	case "avg", "":
+		return string(insights.Average), nil
+	case "min":
+		return string(insights.Minimum), nil
+	case "max":
+		return string(insights.Maximum), nil
+	case "total":
+		return string(insights.Total), nil
+	}
+	return "", fmt.Errorf("unrecognized aggregation type %s, must be avg, min, max, or total", agtype)
 }
