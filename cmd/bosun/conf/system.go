@@ -12,7 +12,7 @@ import (
 	"bosun.org/cmd/bosun/expr"
 	"bosun.org/graphite"
 	"bosun.org/opentsdb"
-	"github.com/Azure/azure-sdk-for-go/profiles/latest/resources/mgmt/resources"
+	"github.com/Azure/azure-sdk-for-go/profiles/preview/resources/mgmt/resources"
 	"github.com/Azure/azure-sdk-for-go/services/preview/monitor/mgmt/2018-03-01/insights"
 	"github.com/Azure/go-autorest/autorest"
 	"github.com/Azure/go-autorest/autorest/azure/auth"
@@ -563,6 +563,8 @@ func (sc *SystemConf) GetAzureMonitorContext() (az expr.AzureMonitorClients) {
 	az.MetricsClient = insights.NewMetricsClient(sc.AzureMonitorConf.SubscriptionId)
 	az.MetricDefinitionsClient = insights.NewMetricDefinitionsClient(sc.AzureMonitorConf.SubscriptionId)
 	az.ResourcesClient = resources.NewClient(sc.AzureMonitorConf.SubscriptionId)
+	az.ResourcesClient.RequestInspector = LogRequest()
+	az.ResourcesClient.ResponseInspector = LogResponse()
 	//az.MetricsClient.RequestInspector, az.MetricDefinitionsClient.RequestInspector = LogRequest(), LogRequest()
 	//az.MetricsClient.ResponseInspector, az.MetricDefinitionsClient.ResponseInspector = LogResponse(), LogResponse()
 	ccc := auth.NewClientCredentialsConfig(sc.AzureMonitorConf.ClientId, sc.AzureMonitorConf.ClientSecret, sc.AzureMonitorConf.TenantId)

@@ -230,6 +230,9 @@ type Table struct {
 func (t Table) Type() models.FuncType { return models.TypeTable }
 func (t Table) Value() interface{}    { return t }
 
+func (a AzureResources) Type() models.FuncType { return models.TypeAzureResourceList }
+func (a AzureResources) Value() interface{}    { return a }
+
 type SortablePoint struct {
 	T time.Time
 	V float64
@@ -792,6 +795,9 @@ func extract(res *Results) interface{} {
 		return float64(res.Results[0].Value.Value().(Scalar))
 	}
 	if len(res.Results) == 1 && res.Results[0].Type() == models.TypeESQuery {
+		return res.Results[0].Value.Value()
+	}
+	if len(res.Results) == 1 && res.Results[0].Type() == models.TypeAzureResourceList {
 		return res.Results[0].Value.Value()
 	}
 	if len(res.Results) == 1 && res.Results[0].Type() == models.TypeESIndexer {

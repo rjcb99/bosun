@@ -9,7 +9,7 @@ import (
 	"bosun.org/cmd/bosun/expr/parse"
 	"bosun.org/models"
 	"bosun.org/opentsdb"
-	"github.com/Azure/azure-sdk-for-go/profiles/latest/resources/mgmt/resources"
+	"github.com/Azure/azure-sdk-for-go/profiles/preview/resources/mgmt/resources"
 	"github.com/Azure/azure-sdk-for-go/services/preview/monitor/mgmt/2018-03-01/insights"
 	"github.com/MiniProfiler/go/miniprofiler"
 )
@@ -22,17 +22,22 @@ var AzureMonitor = map[string]parse.Func{
 		Tags:   tagFirst, //TODO: Appropriate tags func
 		F:      AzureQuery,
 	},
+	"azmulti": {
+		Args:   []models.FuncType{models.TypeString, models.TypeString, models.TypeAzureResourceList, models.TypeString, models.TypeString, models.TypeString, models.TypeString},
+		Return: models.TypeSeriesSet,
+		Tags:   tagFirst, //TODO: Appropriate tags func
+		F:      AzureMultiQuery,
+	},
 	"azmd": {
 		Args:   []models.FuncType{models.TypeString, models.TypeString, models.TypeString, models.TypeString},
 		Return: models.TypeSeriesSet, // TODO return type
 		Tags:   tagFirst,             //TODO: Appropriate tags func
 		F:      AzureMetricDefinitions,
 	},
-	"azr": {
-		Args:   []models.FuncType{},
-		Return: models.TypeSeriesSet, //TODO return type
-		Tags:   tagFirst,             //TODO: Appropriate tags func
-		F:      AzureListResources,
+	"azrt": {
+		Args:   []models.FuncType{models.TypeString},
+		Return: models.TypeAzureResourceList,
+		F:      AzureResourcesByType,
 	},
 }
 
@@ -166,6 +171,9 @@ func AzureQuery(e *State, T miniprofiler.Timer, namespace, metric, tagKeysCSV, r
 						series[mValue.TimeStamp.ToTime()] = *exValue
 					}
 				}
+				if len(series) == 0 {
+					continue
+				}
 				r.Results = append(r.Results, &Result{
 					Value: series,
 					Group: tags,
@@ -174,16 +182,37 @@ func AzureQuery(e *State, T miniprofiler.Timer, namespace, metric, tagKeysCSV, r
 
 		}
 	}
-
 	return
 }
 
-func AzureListResources(e *State, T miniprofiler.Timer) (r *Results, err error) {
+// $resources = azrt("Microsoft.Compute/virtualMachines")
+// azmulti("Percentage CPU", "", $resources, "max", "PT5M", "1h", "")
+func AzureMultiQuery(e *State, T miniprofiler.Timer, metric, tagKeysCSV string, resources AzureResources, agtype string, interval, sdur, edur string) (r *Results, err error) {
+	r = new(Results)
+	queryResults := []*Results{}
+	// TODO: Since each of these is an http query, should run N queries parallel from a pool or something like this
+	for _, resource := range resources {
+		res, err := AzureQuery(e, T, resource.Type, metric, tagKeysCSV, resource.ResourceGroup, resource.Name, agtype, interval, sdur, edur)
+		if err != nil {
+			return r, err
+		}
+		res, err = AddTags(e, T, res, fmt.Sprintf("rsg=%s,name=%s", resource.ResourceGroup, resource.Name))
+		if err != nil {
+			return r, err
+		}
+		queryResults = append(queryResults, res)
+	}
+	r, err = Merge(e, T, queryResults...)
+	return
+}
+
+func AzureListResources(e *State, T miniprofiler.Timer) (AzureResources, error) {
+	// TODO Cache
 	c := e.AzureMonitor.ResourcesClient
 	ctx := context.Background() // TODO fix
-	r = new(Results)
-	resources := []AzureResource{}
+	r := AzureResources{}
 	for rList, err := c.ListComplete(ctx, "", "", nil); rList.NotDone(); err = rList.Next() {
+		// TODO not catching auth error here for some reason, err is nil when error!!
 		if err != nil {
 			return r, err
 		}
@@ -193,16 +222,29 @@ func AzureListResources(e *State, T miniprofiler.Timer) (r *Results, err error) 
 			if len(splitID) < 5 {
 				return r, fmt.Errorf("unexpected ID for resource: %s", *val.ID)
 			}
-			resources = append(resources, AzureResource{
+			r = append(r, AzureResource{
 				Name:          *val.Name,
 				Type:          *val.Type,
 				ResourceGroup: splitID[4],
 			})
 		}
 	}
-	for _, r := range resources {
-		fmt.Println(r)
+	return r, nil
+}
+
+func AzureResourcesByType(e *State, T miniprofiler.Timer, tp string) (r *Results, err error) {
+	resources := AzureResources{}
+	r = new(Results)
+	allResources, err := AzureListResources(e, T)
+	if err != nil {
+		return
 	}
+	for _, res := range allResources {
+		if res.Type == tp {
+			resources = append(resources, res)
+		}
+	}
+	r.Results = append(r.Results, &Result{Value: resources})
 	return
 }
 
@@ -211,6 +253,8 @@ type AzureResource struct {
 	Type          string
 	ResourceGroup string
 }
+
+type AzureResources []AzureResource
 
 type AzureMonitorClients struct {
 	MetricsClient           insights.MetricsClient
