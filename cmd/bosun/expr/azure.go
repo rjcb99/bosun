@@ -207,29 +207,38 @@ func AzureMultiQuery(e *State, T miniprofiler.Timer, metric, tagKeysCSV string, 
 }
 
 func AzureListResources(e *State, T miniprofiler.Timer) (AzureResources, error) {
-	// TODO Cache
-	c := e.AzureMonitor.ResourcesClient
-	ctx := context.Background() // TODO fix
-	r := AzureResources{}
-	for rList, err := c.ListComplete(ctx, "", "", nil); rList.NotDone(); err = rList.Next() {
-		// TODO not catching auth error here for some reason, err is nil when error!!
-		if err != nil {
-			return r, err
-		}
-		val := rList.Value()
-		if val.Name != nil && val.Type != nil && val.ID != nil {
-			splitID := strings.Split(*val.ID, "/")
-			if len(splitID) < 5 {
-				return r, fmt.Errorf("unexpected ID for resource: %s", *val.ID)
+	// TODO Make cache time configurable
+	// TODO Possibly use a different additional cache for this - not shared with queries?
+	key := fmt.Sprintf("AzureResourceCache:%s:%s", e.AzureMonitor.MetricsClient.SubscriptionID, time.Now().Truncate(time.Minute*1)) // https://github.com/golang/groupcache/issues/92
+	getFn := func() (interface{}, error) {
+		c := e.AzureMonitor.ResourcesClient
+		ctx := context.Background() // TODO fix
+		r := AzureResources{}
+		for rList, err := c.ListComplete(ctx, "", "", nil); rList.NotDone(); err = rList.Next() {
+			// TODO not catching auth error here for some reason, err is nil when error!!
+			if err != nil {
+				return r, err
 			}
-			r = append(r, AzureResource{
-				Name:          *val.Name,
-				Type:          *val.Type,
-				ResourceGroup: splitID[4],
-			})
+			val := rList.Value()
+			if val.Name != nil && val.Type != nil && val.ID != nil {
+				splitID := strings.Split(*val.ID, "/")
+				if len(splitID) < 5 {
+					return r, fmt.Errorf("unexpected ID for resource: %s", *val.ID)
+				}
+				r = append(r, AzureResource{
+					Name:          *val.Name,
+					Type:          *val.Type,
+					ResourceGroup: splitID[4],
+				})
+			}
 		}
+		return r, nil
 	}
-	return r, nil
+	val, err := e.Cache.Get(key, getFn)
+	if err != nil {
+		return AzureResources{}, err
+	}
+	return val.(AzureResources), nil
 }
 
 func AzureResourcesByType(e *State, T miniprofiler.Timer, tp string) (r *Results, err error) {
