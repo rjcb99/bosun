@@ -3,6 +3,7 @@ package expr
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/profiles/preview/resources/mgmt/resources"
 	"github.com/Azure/azure-sdk-for-go/services/preview/monitor/mgmt/2018-03-01/insights"
 	"github.com/MiniProfiler/go/miniprofiler"
+	"github.com/kylebrandt/boolq"
 )
 
 // Functions for Querying Azure Montior
@@ -39,9 +41,16 @@ var AzureMonitor = map[string]parse.Func{
 		Return: models.TypeAzureResourceList,
 		F:      AzureResourcesByType,
 	},
+	"azrf": {
+		Args:   []models.FuncType{models.TypeAzureResourceList, models.TypeString},
+		Return: models.TypeAzureResourceList,
+		F:      AzureFilterResources,
+	},
 }
 
-// Reference for supported metrics: https://docs.microsoft.com/en-us/azure/monitoring-and-diagnostics/monitoring-supported-metrics
+// Azure API References
+// - https://docs.microsoft.com/en-us/azure/monitoring-and-diagnostics/monitoring-supported-metrics
+// - https://docs.microsoft.com/en-us/azure/monitoring-and-diagnostics/monitoring-data-sources
 
 // TODO Handling multiple resources
 // - Given a metric and resource group, get the values for each object of ... the same type? and then tag them as such
@@ -225,10 +234,17 @@ func AzureListResources(e *State, T miniprofiler.Timer) (AzureResources, error) 
 				if len(splitID) < 5 {
 					return r, fmt.Errorf("unexpected ID for resource: %s", *val.ID)
 				}
+				azTags := make(map[string]string)
+				for k, v := range val.Tags {
+					if v != nil {
+						azTags[k] = *v
+					}
+				}
 				r = append(r, AzureResource{
 					Name:          *val.Name,
 					Type:          *val.Type,
 					ResourceGroup: splitID[4],
+					Tags:          azTags,
 				})
 			}
 		}
@@ -257,13 +273,73 @@ func AzureResourcesByType(e *State, T miniprofiler.Timer, tp string) (r *Results
 	return
 }
 
+func AzureFilterResources(e *State, T miniprofiler.Timer, resources AzureResources, filter string) (r *Results, err error) {
+	r = new(Results)
+	bqf, err := boolq.Parse(filter)
+	if err != nil {
+		return r, err
+	}
+	filteredResources := AzureResources{}
+	for _, res := range resources {
+		match, err := boolq.AskParsedExpr(bqf, res)
+		if err != nil {
+			return r, err
+		}
+		if match {
+			filteredResources = append(filteredResources, res)
+		}
+	}
+	r.Results = append(r.Results, &Result{Value: filteredResources})
+	return
+}
+
 type AzureResource struct {
 	Name          string
 	Type          string
 	ResourceGroup string
+	Tags          map[string]string
 }
 
 type AzureResources []AzureResource
+
+func (ar AzureResource) Ask(filter string) (bool, error) {
+	sp := strings.SplitN(filter, ":", 2)
+	if len(sp) != 2 {
+		return false, fmt.Errorf("bad filter, filter must be in k:v format, got %v", filter)
+	}
+	key := strings.ToLower(sp[0]) // Make key case insensitive
+	value := sp[1]
+	switch key {
+	case "name":
+		re, err := regexp.Compile(value)
+		if err != nil {
+			return false, err
+		}
+		if re.MatchString(ar.Name) {
+			return true, nil
+		}
+	case "rsg", "resourcegroup":
+		re, err := regexp.Compile(value)
+		if err != nil {
+			return false, err
+		}
+		if re.MatchString(ar.ResourceGroup) {
+			return true, nil
+		}
+	default: // Does not support tags that have a tag key of rsg, resourcegroup, or name
+		if tagV, ok := ar.Tags[key]; ok {
+			re, err := regexp.Compile(value)
+			if err != nil {
+				return false, err
+			}
+			if re.MatchString(tagV) {
+				return true, nil
+			}
+		}
+
+	}
+	return false, nil
+}
 
 type AzureMonitorClients struct {
 	MetricsClient           insights.MetricsClient
