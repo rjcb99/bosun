@@ -10,8 +10,8 @@ import (
 	"bosun.org/cmd/bosun/expr/parse"
 	"bosun.org/models"
 	"bosun.org/opentsdb"
-	"github.com/Azure/azure-sdk-for-go/profiles/preview/resources/mgmt/resources"
 	"github.com/Azure/azure-sdk-for-go/services/preview/monitor/mgmt/2018-03-01/insights"
+	"github.com/Azure/azure-sdk-for-go/services/resources/mgmt/2018-02-01/resources"
 	"github.com/MiniProfiler/go/miniprofiler"
 	"github.com/kylebrandt/boolq"
 )
@@ -52,18 +52,14 @@ var AzureMonitor = map[string]parse.Func{
 // - https://docs.microsoft.com/en-us/azure/monitoring-and-diagnostics/monitoring-supported-metrics
 // - https://docs.microsoft.com/en-us/azure/monitoring-and-diagnostics/monitoring-data-sources
 
-// TODO Handling multiple resources
-// - Given a metric and resource group, get the values for each object of ... the same type? and then tag them as such
-// - Like the above, but gets all resources groups and all the objects in each resource group
-
 // TODO Aggregation types?
 // - I'm not sure all aggregations are available for all metrics, need to explore
 
 // TODO Auto timegrain/interval: Func that decides the timegrain based on the duration of the span of time between start and end
 
 // TODO Cache
-// - Cache for time series queries
-// - Cache for MetricDefintion data - probably longer lived
+// - Used different Cache for resource list
+// - cache metric md?
 
 const azTimeFmt = "2006-01-02T15:04:05"
 
@@ -76,7 +72,6 @@ func AzureMetricDefinitions(e *State, T miniprofiler.Timer, namespace, metric, r
 	// TODO fix context
 	ctx := context.Background()
 	r = new(Results)
-
 	defs, err := c.List(ctx, azResourceURI(c.SubscriptionID, rsg, namespace, resource), namespace)
 	if err != nil {
 		return
@@ -104,7 +99,6 @@ func AzureMetricDefinitions(e *State, T miniprofiler.Timer, namespace, metric, r
 // az("Microsoft.Compute/virtualMachines", "Percentage CPU", "SRE-RSG", "SRE-Linux-Jump", "avg" "PT5M", "1h", "")
 // az("Microsoft.Compute/virtualMachines", "Per Disk Read Bytes/sec", "SlotId", "SRE-RSG", "SRE-Linux-Jump", "max", "PT5M", "1h", "")
 func AzureQuery(e *State, T miniprofiler.Timer, namespace, metric, tagKeysCSV, rsg, resource, agtype, interval, sdur, edur string) (r *Results, err error) {
-	c := e.Backends.AzureMonitor.MetricsClient
 	// TODO fix context
 	ctx := context.Background()
 	r = new(Results)
@@ -120,8 +114,8 @@ func AzureQuery(e *State, T miniprofiler.Timer, namespace, metric, tagKeysCSV, r
 			return
 		}
 	}
-	st := e.now.Add(time.Duration(-sd))
-	en := e.now.Add(time.Duration(-ed))
+	st := e.now.Add(time.Duration(-sd)).Format(azTimeFmt)
+	en := e.now.Add(time.Duration(-ed)).Format(azTimeFmt)
 
 	filter := ""
 	if tagKeysCSV != "" {
@@ -141,57 +135,67 @@ func AzureQuery(e *State, T miniprofiler.Timer, namespace, metric, tagKeysCSV, r
 	if err != nil {
 		return
 	}
-
-	resp, err := c.List(ctx, azResourceURI(c.SubscriptionID, rsg, namespace, resource),
-		fmt.Sprintf("%s/%s", st.Format(azTimeFmt), en.Format(azTimeFmt)),
-		tg,
-		metric,
-		aggLong,
-		nil,
-		"asc",
-		filter,
-		insights.Data,
-		namespace)
-	if err != nil {
-		return
-	}
-	// Optional todo capture X-Ms-Ratelimit-Remaining-Subscription-Reads
-	if resp.Value != nil {
-		for _, tsContainer := range *resp.Value {
-			if tsContainer.Timeseries == nil {
-				continue
-			}
-			for _, dataContainer := range *tsContainer.Timeseries {
-				if dataContainer.Data == nil {
-					continue
-				}
-				series := make(Series)
-				tags := make(opentsdb.TagSet)
-				if dataContainer.Metadatavalues != nil {
-					for _, md := range *dataContainer.Metadatavalues {
-						if md.Name != nil && md.Name.Value != nil && md.Value != nil {
-							tags[*md.Name.Value] = *md.Value
-						} // TODO: Else?
-					}
-				}
-				for _, mValue := range *dataContainer.Data {
-					exValue := AzureExtractMetricValue(&mValue, aggLong)
-					if exValue != nil && mValue.TimeStamp != nil {
-						series[mValue.TimeStamp.ToTime()] = *exValue
-					}
-				}
-				if len(series) == 0 {
-					continue
-				}
-				r.Results = append(r.Results, &Result{
-					Value: series,
-					Group: tags,
-				})
-			}
-
+	c := e.Backends.AzureMonitor.MetricsClient
+	cacheKey := strings.Join([]string{c.SubscriptionID, namespace, metric, tagKeysCSV, rsg, resource, agtype, interval, st, en}, ":")
+	getFn := func() (interface{}, error) {
+		resp, err := c.List(ctx, azResourceURI(c.SubscriptionID, rsg, namespace, resource),
+			fmt.Sprintf("%s/%s", st, en),
+			tg,
+			metric,
+			aggLong,
+			nil,
+			"asc",
+			filter,
+			insights.Data,
+			namespace)
+		if err != nil {
+			return r, err
 		}
+		// Optional todo capture X-Ms-Ratelimit-Remaining-Subscription-Reads
+		if resp.Value != nil {
+			for _, tsContainer := range *resp.Value {
+				if tsContainer.Timeseries == nil {
+					continue
+				}
+				for _, dataContainer := range *tsContainer.Timeseries {
+					if dataContainer.Data == nil {
+						continue
+					}
+					series := make(Series)
+					tags := make(opentsdb.TagSet)
+					tags["rsg"] = rsg
+					tags["name"] = resource
+					if dataContainer.Metadatavalues != nil {
+						for _, md := range *dataContainer.Metadatavalues {
+							if md.Name != nil && md.Name.Value != nil && md.Value != nil {
+								tags[*md.Name.Value] = *md.Value
+							} // TODO: Else?
+						}
+					}
+					for _, mValue := range *dataContainer.Data {
+						exValue := AzureExtractMetricValue(&mValue, aggLong)
+						if exValue != nil && mValue.TimeStamp != nil {
+							series[mValue.TimeStamp.ToTime()] = *exValue
+						}
+					}
+					if len(series) == 0 {
+						continue
+					}
+					r.Results = append(r.Results, &Result{
+						Value: series,
+						Group: tags,
+					})
+				}
+
+			}
+		}
+		return r, nil
 	}
-	return
+	val, err := e.Cache.Get(cacheKey, getFn)
+	if err != nil {
+		return r, err
+	}
+	return val.(*Results), nil
 }
 
 // $resources = azrt("Microsoft.Compute/virtualMachines")
@@ -202,10 +206,6 @@ func AzureMultiQuery(e *State, T miniprofiler.Timer, metric, tagKeysCSV string, 
 	// TODO: Since each of these is an http query, should run N queries parallel from a pool or something like this
 	for _, resource := range resources {
 		res, err := AzureQuery(e, T, resource.Type, metric, tagKeysCSV, resource.ResourceGroup, resource.Name, agtype, interval, sdur, edur)
-		if err != nil {
-			return r, err
-		}
-		res, err = AddTags(e, T, res, fmt.Sprintf("rsg=%s,name=%s", resource.ResourceGroup, resource.Name))
 		if err != nil {
 			return r, err
 		}
