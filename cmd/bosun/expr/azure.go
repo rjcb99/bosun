@@ -149,53 +149,54 @@ func AzureQuery(e *State, T miniprofiler.Timer, namespace, metric, tagKeysCSV, r
 			insights.Data,
 			namespace)
 		if err != nil {
-			return r, err
+			return resp, err
 		}
-		// Optional todo capture X-Ms-Ratelimit-Remaining-Subscription-Reads
-		if resp.Value != nil {
-			for _, tsContainer := range *resp.Value {
-				if tsContainer.Timeseries == nil {
-					continue
-				}
-				for _, dataContainer := range *tsContainer.Timeseries {
-					if dataContainer.Data == nil {
-						continue
-					}
-					series := make(Series)
-					tags := make(opentsdb.TagSet)
-					tags["rsg"] = rsg
-					tags["name"] = resource
-					if dataContainer.Metadatavalues != nil {
-						for _, md := range *dataContainer.Metadatavalues {
-							if md.Name != nil && md.Name.Value != nil && md.Value != nil {
-								tags[*md.Name.Value] = *md.Value
-							} // TODO: Else?
-						}
-					}
-					for _, mValue := range *dataContainer.Data {
-						exValue := AzureExtractMetricValue(&mValue, aggLong)
-						if exValue != nil && mValue.TimeStamp != nil {
-							series[mValue.TimeStamp.ToTime()] = *exValue
-						}
-					}
-					if len(series) == 0 {
-						continue
-					}
-					r.Results = append(r.Results, &Result{
-						Value: series,
-						Group: tags,
-					})
-				}
-
-			}
-		}
-		return r, nil
+		return resp, nil
 	}
 	val, err := e.Cache.Get(cacheKey, getFn)
 	if err != nil {
 		return r, err
 	}
-	return val.(*Results), nil
+	resp := val.(insights.Response)
+	// Optional todo capture X-Ms-Ratelimit-Remaining-Subscription-Reads
+	if resp.Value != nil {
+		for _, tsContainer := range *resp.Value {
+			if tsContainer.Timeseries == nil {
+				continue
+			}
+			for _, dataContainer := range *tsContainer.Timeseries {
+				if dataContainer.Data == nil {
+					continue
+				}
+				series := make(Series)
+				tags := make(opentsdb.TagSet)
+				tags["rsg"] = rsg
+				tags["name"] = resource
+				if dataContainer.Metadatavalues != nil {
+					for _, md := range *dataContainer.Metadatavalues {
+						if md.Name != nil && md.Name.Value != nil && md.Value != nil {
+							tags[*md.Name.Value] = *md.Value
+						} // TODO: Else?
+					}
+				}
+				for _, mValue := range *dataContainer.Data {
+					exValue := AzureExtractMetricValue(&mValue, aggLong)
+					if exValue != nil && mValue.TimeStamp != nil {
+						series[mValue.TimeStamp.ToTime()] = *exValue
+					}
+				}
+				if len(series) == 0 {
+					continue
+				}
+				r.Results = append(r.Results, &Result{
+					Value: series,
+					Group: tags,
+				})
+			}
+
+		}
+	}
+	return r, nil
 }
 
 // $resources = azrt("Microsoft.Compute/virtualMachines")
