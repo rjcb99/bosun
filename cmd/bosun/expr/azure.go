@@ -19,27 +19,31 @@ import (
 // Functions for Querying Azure Montior
 var AzureMonitor = map[string]parse.Func{
 	"az": {
-		Args:   []models.FuncType{models.TypeString, models.TypeString, models.TypeString, models.TypeString, models.TypeString, models.TypeString, models.TypeString, models.TypeString, models.TypeString},
-		Return: models.TypeSeriesSet,
-		Tags:   tagFirst, //TODO: Appropriate tags func
-		F:      AzureQuery,
+		Args:          []models.FuncType{models.TypeString, models.TypeString, models.TypeString, models.TypeString, models.TypeString, models.TypeString, models.TypeString, models.TypeString, models.TypeString},
+		Return:        models.TypeSeriesSet,
+		Tags:          tagFirst, //TODO: Appropriate tags func
+		F:             AzureQuery,
+		PrefixEnabled: true,
 	},
 	"azmulti": {
-		Args:   []models.FuncType{models.TypeString, models.TypeString, models.TypeAzureResourceList, models.TypeString, models.TypeString, models.TypeString, models.TypeString},
-		Return: models.TypeSeriesSet,
-		Tags:   tagFirst, //TODO: Appropriate tags func
-		F:      AzureMultiQuery,
+		Args:          []models.FuncType{models.TypeString, models.TypeString, models.TypeAzureResourceList, models.TypeString, models.TypeString, models.TypeString, models.TypeString},
+		Return:        models.TypeSeriesSet,
+		Tags:          tagFirst, //TODO: Appropriate tags func
+		F:             AzureMultiQuery,
+		PrefixEnabled: true,
 	},
 	"azmd": {
-		Args:   []models.FuncType{models.TypeString, models.TypeString, models.TypeString, models.TypeString},
-		Return: models.TypeSeriesSet, // TODO return type
-		Tags:   tagFirst,             //TODO: Appropriate tags func
-		F:      AzureMetricDefinitions,
+		Args:          []models.FuncType{models.TypeString, models.TypeString, models.TypeString, models.TypeString},
+		Return:        models.TypeSeriesSet, // TODO return type
+		Tags:          tagFirst,             //TODO: Appropriate tags func
+		F:             AzureMetricDefinitions,
+		PrefixEnabled: true,
 	},
 	"azrt": {
-		Args:   []models.FuncType{models.TypeString},
-		Return: models.TypeAzureResourceList,
-		F:      AzureResourcesByType,
+		Args:          []models.FuncType{models.TypeString},
+		Return:        models.TypeAzureResourceList,
+		F:             AzureResourcesByType,
+		PrefixEnabled: true,
 	},
 	"azrf": {
 		Args:   []models.FuncType{models.TypeAzureResourceList, models.TypeString},
@@ -67,11 +71,15 @@ func azResourceURI(subscription, resourceGrp, Namespace, Resource string) string
 	return fmt.Sprintf("/subscriptions/%s/resourceGroups/%s/providers/%s/%s", subscription, resourceGrp, Namespace, Resource)
 }
 
-func AzureMetricDefinitions(e *State, T miniprofiler.Timer, namespace, metric, rsg, resource string) (r *Results, err error) {
-	c := e.Backends.AzureMonitor.MetricDefinitionsClient
+func AzureMetricDefinitions(prefix string, e *State, T miniprofiler.Timer, namespace, metric, rsg, resource string) (r *Results, err error) {
+	r = new(Results)
+	cc, clientFound := e.Backends.AzureMonitor[prefix]
+	if !clientFound {
+		return r, fmt.Errorf("azure client with name %v not defined", prefix)
+	}
+	c := cc.MetricDefinitionsClient
 	// TODO fix context
 	ctx := context.Background()
-	r = new(Results)
 	defs, err := c.List(ctx, azResourceURI(c.SubscriptionID, rsg, namespace, resource), namespace)
 	if err != nil {
 		return
@@ -98,7 +106,12 @@ func AzureMetricDefinitions(e *State, T miniprofiler.Timer, namespace, metric, r
 
 // az("Microsoft.Compute/virtualMachines", "Percentage CPU", "SRE-RSG", "SRE-Linux-Jump", "avg" "PT5M", "1h", "")
 // az("Microsoft.Compute/virtualMachines", "Per Disk Read Bytes/sec", "SlotId", "SRE-RSG", "SRE-Linux-Jump", "max", "PT5M", "1h", "")
-func AzureQuery(e *State, T miniprofiler.Timer, namespace, metric, tagKeysCSV, rsg, resource, agtype, interval, sdur, edur string) (r *Results, err error) {
+func AzureQuery(prefix string, e *State, T miniprofiler.Timer, namespace, metric, tagKeysCSV, rsg, resource, agtype, interval, sdur, edur string) (r *Results, err error) {
+	r = new(Results)
+	cc, clientFound := e.Backends.AzureMonitor[prefix]
+	if !clientFound {
+		return r, fmt.Errorf("azure client with name %v not defined", prefix)
+	}
 	// TODO fix context
 	ctx := context.Background()
 	r = new(Results)
@@ -135,8 +148,8 @@ func AzureQuery(e *State, T miniprofiler.Timer, namespace, metric, tagKeysCSV, r
 	if err != nil {
 		return
 	}
-	c := e.Backends.AzureMonitor.MetricsClient
-	cacheKey := strings.Join([]string{c.SubscriptionID, namespace, metric, tagKeysCSV, rsg, resource, agtype, interval, st, en}, ":")
+	c := cc.MetricsClient
+	cacheKey := strings.Join([]string{prefix, namespace, metric, tagKeysCSV, rsg, resource, agtype, interval, st, en}, ":")
 	getFn := func() (interface{}, error) {
 		resp, err := c.List(ctx, azResourceURI(c.SubscriptionID, rsg, namespace, resource),
 			fmt.Sprintf("%s/%s", st, en),
@@ -201,12 +214,12 @@ func AzureQuery(e *State, T miniprofiler.Timer, namespace, metric, tagKeysCSV, r
 
 // $resources = azrt("Microsoft.Compute/virtualMachines")
 // azmulti("Percentage CPU", "", $resources, "max", "PT5M", "1h", "")
-func AzureMultiQuery(e *State, T miniprofiler.Timer, metric, tagKeysCSV string, resources AzureResources, agtype string, interval, sdur, edur string) (r *Results, err error) {
+func AzureMultiQuery(prefix string, e *State, T miniprofiler.Timer, metric, tagKeysCSV string, resources AzureResources, agtype string, interval, sdur, edur string) (r *Results, err error) {
 	r = new(Results)
 	queryResults := []*Results{}
 	// TODO: Since each of these is an http query, should run N queries parallel from a pool or something like this
 	for _, resource := range resources {
-		res, err := AzureQuery(e, T, resource.Type, metric, tagKeysCSV, resource.ResourceGroup, resource.Name, agtype, interval, sdur, edur)
+		res, err := AzureQuery(prefix, e, T, resource.Type, metric, tagKeysCSV, resource.ResourceGroup, resource.Name, agtype, interval, sdur, edur)
 		if err != nil {
 			return r, err
 		}
@@ -216,14 +229,18 @@ func AzureMultiQuery(e *State, T miniprofiler.Timer, metric, tagKeysCSV string, 
 	return
 }
 
-func AzureListResources(e *State, T miniprofiler.Timer) (AzureResources, error) {
+func AzureListResources(prefix string, e *State, T miniprofiler.Timer) (AzureResources, error) {
 	// TODO Make cache time configurable
 	// TODO Possibly use a different additional cache for this - not shared with queries?
-	key := fmt.Sprintf("AzureResourceCache:%s:%s", e.AzureMonitor.MetricsClient.SubscriptionID, time.Now().Truncate(time.Minute*1)) // https://github.com/golang/groupcache/issues/92
+	key := fmt.Sprintf("AzureResourceCache:%s:%s", prefix, time.Now().Truncate(time.Minute*1)) // https://github.com/golang/groupcache/issues/92
 	getFn := func() (interface{}, error) {
-		c := e.AzureMonitor.ResourcesClient
-		ctx := context.Background() // TODO fix
 		r := AzureResources{}
+		cc, clientFound := e.Backends.AzureMonitor[prefix]
+		if !clientFound {
+			return r, fmt.Errorf("azure client with name %v not defined", prefix)
+		}
+		c := cc.ResourcesClient
+		ctx := context.Background() // TODO fix
 		for rList, err := c.ListComplete(ctx, "", "", nil); rList.NotDone(); err = rList.Next() {
 			// TODO not catching auth error here for some reason, err is nil when error!!
 			if err != nil {
@@ -258,10 +275,10 @@ func AzureListResources(e *State, T miniprofiler.Timer) (AzureResources, error) 
 	return val.(AzureResources), nil
 }
 
-func AzureResourcesByType(e *State, T miniprofiler.Timer, tp string) (r *Results, err error) {
+func AzureResourcesByType(prefix string, e *State, T miniprofiler.Timer, tp string) (r *Results, err error) {
 	resources := AzureResources{}
 	r = new(Results)
-	allResources, err := AzureListResources(e, T)
+	allResources, err := AzureListResources(prefix, e, T)
 	if err != nil {
 		return
 	}
@@ -342,11 +359,13 @@ func (ar AzureResource) Ask(filter string) (bool, error) {
 	return false, nil
 }
 
-type AzureMonitorClients struct {
+type AzureMonitorClientCollection struct {
 	MetricsClient           insights.MetricsClient
 	MetricDefinitionsClient insights.MetricDefinitionsClient
 	ResourcesClient         resources.Client
 }
+
+type AzureMonitorClients map[string]AzureMonitorClientCollection
 
 func AzureExtractMetricValue(mv *insights.MetricValue, field string) (v *float64) {
 	switch field {

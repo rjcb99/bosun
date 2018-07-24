@@ -740,7 +740,7 @@ func (e *State) walkFunc(node *parse.FuncNode, T miniprofiler.Timer) *Results {
 			case *parse.ExprNode:
 				v = e.walkExpr(t, T)
 			case *parse.PrefixNode:
-				v = e.walkPrefix(t, T)
+				v = extract(e.walkPrefix(t, T))
 			default:
 				panic(fmt.Errorf("expr: unknown func arg type"))
 			}

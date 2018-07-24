@@ -54,7 +54,7 @@ type SystemConf struct {
 	GraphiteConf     GraphiteConf
 	InfluxConf       InfluxConf
 	ElasticConf      map[string]ElasticConf
-	AzureMonitorConf AzureMonitorConf
+	AzureMonitorConf map[string]AzureMonitorConf
 
 	AnnotateConf AnnotateConf
 
@@ -92,7 +92,7 @@ func (sc *SystemConf) EnabledBackends() EnabledBackends {
 	b.Influx = sc.InfluxConf.URL != ""
 	b.Elastic = len(sc.ElasticConf["default"].Hosts) != 0
 	b.Annotate = len(sc.AnnotateConf.Hosts) != 0
-	b.AzureMonitor = sc.AzureMonitorConf.ClientId != ""
+	b.AzureMonitor = sc.AzureMonitorConf["default"].ClientId != ""
 	return b
 }
 
@@ -559,21 +559,26 @@ func (sc *SystemConf) GetElasticContext() expr.ElasticHosts {
 
 // GetAzureMonitorContext returns a Azure Monitor API context which
 // contains the information needs to query the azure API
-func (sc *SystemConf) GetAzureMonitorContext() (az expr.AzureMonitorClients) {
-	az.MetricsClient = insights.NewMetricsClient(sc.AzureMonitorConf.SubscriptionId)
-	az.MetricDefinitionsClient = insights.NewMetricDefinitionsClient(sc.AzureMonitorConf.SubscriptionId)
-	az.ResourcesClient = resources.NewClient(sc.AzureMonitorConf.SubscriptionId)
-	az.ResourcesClient.RequestInspector = LogRequest()
-	//az.ResourcesClient.ResponseInspector = LogResponse()
-	az.MetricsClient.RequestInspector, az.MetricDefinitionsClient.RequestInspector = LogRequest(), LogRequest()
-	//az.MetricsClient.ResponseInspector, az.MetricDefinitionsClient.ResponseInspector = LogResponse(), LogResponse()
-	ccc := auth.NewClientCredentialsConfig(sc.AzureMonitorConf.ClientId, sc.AzureMonitorConf.ClientSecret, sc.AzureMonitorConf.TenantId)
-	at, err := ccc.Authorizer()
-	if err != nil {
-		log.Fatal("azure conf: ", err)
+func (sc *SystemConf) GetAzureMonitorContext() expr.AzureMonitorClients {
+	allClients := make(expr.AzureMonitorClients)
+	for prefix, conf := range sc.AzureMonitorConf {
+		clients := expr.AzureMonitorClientCollection{}
+		clients.MetricsClient = insights.NewMetricsClient(conf.SubscriptionId)
+		clients.MetricDefinitionsClient = insights.NewMetricDefinitionsClient(conf.SubscriptionId)
+		clients.ResourcesClient = resources.NewClient(conf.SubscriptionId)
+		//clients.ResourcesClient.RequestInspector = LogRequest()
+		//clients.ResourcesClient.ResponseInspector = LogResponse()
+		//clients.MetricsClient.RequestInspector, clients.MetricDefinitionsClient.RequestInspector = LogRequest(), LogRequest()
+		//clients.MetricsClient.ResponseInspector, clients.MetricDefinitionsClient.ResponseInspector = LogResponse(), LogResponse()
+		ccc := auth.NewClientCredentialsConfig(conf.ClientId, conf.ClientSecret, conf.TenantId)
+		at, err := ccc.Authorizer()
+		if err != nil {
+			log.Fatal("azure conf: ", err)
+		}
+		clients.MetricsClient.Authorizer, clients.MetricDefinitionsClient.Authorizer, clients.ResourcesClient.Authorizer = at, at, at
+		allClients[prefix] = clients
 	}
-	az.MetricsClient.Authorizer, az.MetricDefinitionsClient.Authorizer, az.ResourcesClient.Authorizer = at, at, at
-	return
+	return allClients
 }
 
 func LogRequest() autorest.PrepareDecorator {
