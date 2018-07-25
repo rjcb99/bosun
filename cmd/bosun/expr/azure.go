@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"bosun.org/cmd/bosun/expr/parse"
@@ -16,7 +17,7 @@ import (
 	"github.com/kylebrandt/boolq"
 )
 
-// Functions for Querying Azure Montior
+// AzureMonitor is the collection of functions for the azure monitor datasource
 var AzureMonitor = map[string]parse.Func{
 	"az": {
 		Args:          []models.FuncType{models.TypeString, models.TypeString, models.TypeString, models.TypeString, models.TypeString, models.TypeString, models.TypeString, models.TypeString, models.TypeString},
@@ -56,9 +57,6 @@ var AzureMonitor = map[string]parse.Func{
 // - https://docs.microsoft.com/en-us/azure/monitoring-and-diagnostics/monitoring-supported-metrics
 // - https://docs.microsoft.com/en-us/azure/monitoring-and-diagnostics/monitoring-data-sources
 
-// TODO Aggregation types?
-// - I'm not sure all aggregations are available for all metrics, need to explore
-
 // TODO Auto timegrain/interval: Func that decides the timegrain based on the duration of the span of time between start and end
 
 // TODO Cache
@@ -71,6 +69,8 @@ func azResourceURI(subscription, resourceGrp, Namespace, Resource string) string
 	return fmt.Sprintf("/subscriptions/%s/resourceGroups/%s/providers/%s/%s", subscription, resourceGrp, Namespace, Resource)
 }
 
+// AzureMetricDefinitions fetches metric information for a specific resource and metric tuple
+// TODO make this return and not fmt.Printf
 func AzureMetricDefinitions(prefix string, e *State, T miniprofiler.Timer, namespace, metric, rsg, resource string) (r *Results, err error) {
 	r = new(Results)
 	cc, clientFound := e.Backends.AzureMonitor[prefix]
@@ -78,9 +78,7 @@ func AzureMetricDefinitions(prefix string, e *State, T miniprofiler.Timer, names
 		return r, fmt.Errorf("azure client with name %v not defined", prefix)
 	}
 	c := cc.MetricDefinitionsClient
-	// TODO fix context
-	ctx := context.Background()
-	defs, err := c.List(ctx, azResourceURI(c.SubscriptionID, rsg, namespace, resource), namespace)
+	defs, err := c.List(context.Background(), azResourceURI(c.SubscriptionID, rsg, namespace, resource), namespace)
 	if err != nil {
 		return
 	}
@@ -99,21 +97,22 @@ func AzureMetricDefinitions(prefix string, e *State, T miniprofiler.Timer, names
 			}
 		}
 		fmt.Println(*def.Name.LocalizedValue, strings.Join(dims, ", "), strings.Join(agtypes, ", "))
-
 	}
 	return
 }
 
 // az("Microsoft.Compute/virtualMachines", "Percentage CPU", "SRE-RSG", "SRE-Linux-Jump", "avg" "PT5M", "1h", "")
 // az("Microsoft.Compute/virtualMachines", "Per Disk Read Bytes/sec", "SlotId", "SRE-RSG", "SRE-Linux-Jump", "max", "PT5M", "1h", "")
+
+// AzureQuery queries an Azure monitor metric for the given resource and returns a series set
 func AzureQuery(prefix string, e *State, T miniprofiler.Timer, namespace, metric, tagKeysCSV, rsg, resource, agtype, interval, sdur, edur string) (r *Results, err error) {
 	r = new(Results)
+	// Verify prefix is a defined resource and fetch the collection of clients
 	cc, clientFound := e.Backends.AzureMonitor[prefix]
 	if !clientFound {
 		return r, fmt.Errorf("azure client with name %v not defined", prefix)
 	}
-	// TODO fix context
-	ctx := context.Background()
+	c := cc.MetricsClient
 	r = new(Results)
 	// Parse Relative Time to absolute time
 	sd, err := opentsdb.ParseDuration(sdur)
@@ -130,6 +129,7 @@ func AzureQuery(prefix string, e *State, T miniprofiler.Timer, namespace, metric
 	st := e.now.Add(time.Duration(-sd)).Format(azTimeFmt)
 	en := e.now.Add(time.Duration(-ed)).Format(azTimeFmt)
 
+	// Set Dimensions (tag) keys for metrics that support them by building a filter
 	filter := ""
 	if tagKeysCSV != "" {
 		filters := []string{}
@@ -139,19 +139,22 @@ func AzureQuery(prefix string, e *State, T miniprofiler.Timer, namespace, metric
 		}
 		filter = strings.Join(filters, " and ")
 	}
+
+	// Set the Interval/Timegrain (Azure metric downsampling)
 	var tg *string
 	if interval != "" {
 		tg = &interval
 	}
 
+	// Set azure aggregation method
 	aggLong, err := AzureShortAggToLong(agtype)
 	if err != nil {
 		return
 	}
-	c := cc.MetricsClient
 	cacheKey := strings.Join([]string{prefix, namespace, metric, tagKeysCSV, rsg, resource, agtype, interval, st, en}, ":")
+	// Function to fetch Azure Metric values
 	getFn := func() (interface{}, error) {
-		resp, err := c.List(ctx, azResourceURI(c.SubscriptionID, rsg, namespace, resource),
+		resp, err := c.List(context.Background(), azResourceURI(c.SubscriptionID, rsg, namespace, resource),
 			fmt.Sprintf("%s/%s", st, en),
 			tg,
 			metric,
@@ -166,6 +169,7 @@ func AzureQuery(prefix string, e *State, T miniprofiler.Timer, namespace, metric
 		}
 		return resp, nil
 	}
+	// Get azure metric values by calling azure or via cache if available
 	val, err := e.Cache.Get(cacheKey, getFn)
 	if err != nil {
 		return r, err
@@ -175,16 +179,17 @@ func AzureQuery(prefix string, e *State, T miniprofiler.Timer, namespace, metric
 	if resp.Value != nil {
 		for _, tsContainer := range *resp.Value {
 			if tsContainer.Timeseries == nil {
-				continue
+				continue // If the container doesn't have a time series object then skip
 			}
 			for _, dataContainer := range *tsContainer.Timeseries {
 				if dataContainer.Data == nil {
-					continue
+					continue // The timeseries has no data in it - then skip
 				}
 				series := make(Series)
 				tags := make(opentsdb.TagSet)
 				tags["rsg"] = rsg
 				tags["name"] = resource
+				// Get the Key/Values that make up the azure dimension and turn them into tags
 				if dataContainer.Metadatavalues != nil {
 					for _, md := range *dataContainer.Metadatavalues {
 						if md.Name != nil && md.Name.Value != nil && md.Value != nil {
@@ -199,14 +204,13 @@ func AzureQuery(prefix string, e *State, T miniprofiler.Timer, namespace, metric
 					}
 				}
 				if len(series) == 0 {
-					continue
+					continue // If we end up with an empty series then skip
 				}
 				r.Results = append(r.Results, &Result{
 					Value: series,
 					Group: tags,
 				})
 			}
-
 		}
 	}
 	return r, nil
@@ -214,25 +218,71 @@ func AzureQuery(prefix string, e *State, T miniprofiler.Timer, namespace, metric
 
 // $resources = azrt("Microsoft.Compute/virtualMachines")
 // azmulti("Percentage CPU", "", $resources, "max", "PT5M", "1h", "")
+
+// AzureMultiQuery queries multiple Azure resources and returns them as a single result set
+// It makes one HTTP request per resource and parallelizes the requests 
 func AzureMultiQuery(prefix string, e *State, T miniprofiler.Timer, metric, tagKeysCSV string, resources AzureResources, agtype string, interval, sdur, edur string) (r *Results, err error) {
 	r = new(Results)
 	queryResults := []*Results{}
-	// TODO: Since each of these is an http query, should run N queries parallel from a pool or something like this
-	for _, resource := range resources {
-		res, err := AzureQuery(prefix, e, T, resource.Type, metric, tagKeysCSV, resource.ResourceGroup, resource.Name, agtype, interval, sdur, edur)
-		if err != nil {
-			return r, err
+
+	workerConcurrency := 5 // TODO take this from configuration
+	var wg sync.WaitGroup
+	// reqCh (Request Channel) is populated with azure resources, and resources are pulled from channel to make a time series request per resource
+	reqCh := make(chan AzureResource, len(resources))
+	// resCh (Result Channel) contains the timeseries responses for requests for resource
+	resCh := make(chan *Results, len(resources))
+	// errCh (Error Channel) contains any errors from requests for
+	errCh := make(chan error, len(resources))
+	// a worker makes a time series request for a resource
+	worker := func() {
+		for resource := range reqCh {
+			res, err := AzureQuery(prefix, e, T, resource.Type, metric, tagKeysCSV, resource.ResourceGroup, resource.Name, agtype, interval, sdur, edur)
+			resCh <- res
+			errCh <- err
 		}
+		defer wg.Done()
+	}
+	// Create N workers to parallelize multiple requests at once since he resource requires an HTTP request
+	for i := 0; i < workerConcurrency; i++ {
+		wg.Add(1)
+		go worker()
+	}
+	// Feed resources into the request channel which the workers will consume
+	for _, resource := range resources {
+		reqCh <- resource
+	}
+	close(reqCh)
+	wg.Wait() // Wait for all the workers to finish
+	close(resCh)
+	close(errCh)
+
+	// Gather errors from the request and return an error if any of the requests failled
+	errors := []string{}
+	for err := range errCh {
+		if err == nil {
+			continue
+		}
+		errors = append(errors, err.Error())
+	}
+	if len(errors) > 0 {
+		return r, fmt.Errorf(strings.Join(errors, " :: "))
+	}
+	// Gather all the query results
+	for res := range resCh {
 		queryResults = append(queryResults, res)
 	}
+	// Merge the query results into a single seriesSet
 	r, err = Merge(e, T, queryResults...)
 	return
 }
 
+// AzureListResources fetches all resources for the tenant/subscription and caches them for
+// up to one minute.
 func AzureListResources(prefix string, e *State, T miniprofiler.Timer) (AzureResources, error) {
-	// TODO Make cache time configurable
-	// TODO Possibly use a different additional cache for this - not shared with queries?
+	// Cache will only last for one minute. In practice this will only apply for web sessions since a
+	// new cache is created for each check cycle in the cache
 	key := fmt.Sprintf("AzureResourceCache:%s:%s", prefix, time.Now().Truncate(time.Minute*1)) // https://github.com/golang/groupcache/issues/92
+	// getFn is a cacheable function for listing azure resources
 	getFn := func() (interface{}, error) {
 		r := AzureResources{}
 		cc, clientFound := e.Backends.AzureMonitor[prefix]
@@ -240,18 +290,20 @@ func AzureListResources(prefix string, e *State, T miniprofiler.Timer) (AzureRes
 			return r, fmt.Errorf("azure client with name %v not defined", prefix)
 		}
 		c := cc.ResourcesClient
-		ctx := context.Background() // TODO fix
-		for rList, err := c.ListComplete(ctx, "", "", nil); rList.NotDone(); err = rList.Next() {
+		// Page through all resources
+		for rList, err := c.ListComplete(context.Background(), "", "", nil); rList.NotDone(); err = rList.Next() {
 			// TODO not catching auth error here for some reason, err is nil when error!!
 			if err != nil {
 				return r, err
 			}
 			val := rList.Value()
 			if val.Name != nil && val.Type != nil && val.ID != nil {
+				// Extract out the resource group name from the Id
 				splitID := strings.Split(*val.ID, "/")
 				if len(splitID) < 5 {
 					return r, fmt.Errorf("unexpected ID for resource: %s", *val.ID)
 				}
+				// Add azure tags to the resource
 				azTags := make(map[string]string)
 				for k, v := range val.Tags {
 					if v != nil {
@@ -275,6 +327,8 @@ func AzureListResources(prefix string, e *State, T miniprofiler.Timer) (AzureRes
 	return val.(AzureResources), nil
 }
 
+// AzureResourcesByType returns all resources of the specified type
+// It fetches the complete list resources and then filters them relying on a Cache of that resource list
 func AzureResourcesByType(prefix string, e *State, T miniprofiler.Timer, tp string) (r *Results, err error) {
 	resources := AzureResources{}
 	r = new(Results)
@@ -291,6 +345,8 @@ func AzureResourcesByType(prefix string, e *State, T miniprofiler.Timer, tp stri
 	return
 }
 
+// AzureFilterResources filters a list of resources based on the value of the name, resource group
+// or tags associated with that resource
 func AzureFilterResources(e *State, T miniprofiler.Timer, resources AzureResources, filter string) (r *Results, err error) {
 	r = new(Results)
 	bqf, err := boolq.Parse(filter)
@@ -311,6 +367,7 @@ func AzureFilterResources(e *State, T miniprofiler.Timer, resources AzureResourc
 	return
 }
 
+// AzureResource is a container for Azure resource information that Bosun can interact with
 type AzureResource struct {
 	Name          string
 	Type          string
@@ -318,8 +375,11 @@ type AzureResource struct {
 	Tags          map[string]string
 }
 
+// AzureResources is a slice of AzureResource
 type AzureResources []AzureResource
 
+// Ask makes an AzureResource a github.com/kylebrandt/boolq Asker, which allows it to
+// to take boolean expressions to create conditions
 func (ar AzureResource) Ask(filter string) (bool, error) {
 	sp := strings.SplitN(filter, ":", 2)
 	if len(sp) != 2 {
@@ -359,14 +419,21 @@ func (ar AzureResource) Ask(filter string) (bool, error) {
 	return false, nil
 }
 
+// AzureMonitorClientCollection is a collection of Azure SDK clients since
+// the SDK provides different clients to access different sorts of resources
 type AzureMonitorClientCollection struct {
 	MetricsClient           insights.MetricsClient
 	MetricDefinitionsClient insights.MetricDefinitionsClient
 	ResourcesClient         resources.Client
 }
 
+// AzureMonitorClients is map of all the AzureMonitorClientCollections that
+// have been configured. This is so multiple subscription/tenant/clients
+// can be queries from the same Bosun instance using the prefix syntax
 type AzureMonitorClients map[string]AzureMonitorClientCollection
 
+// AzureExtractMetricValue is a helper for fetching the value of the requested
+// aggregation for the metric
 func AzureExtractMetricValue(mv *insights.MetricValue, field string) (v *float64) {
 	switch field {
 	case string(insights.Average), "":
@@ -381,6 +448,8 @@ func AzureExtractMetricValue(mv *insights.MetricValue, field string) (v *float64
 	return
 }
 
+// AzureShortAggToLong coverts bosun style names for aggregations (like the reduction functions)
+// to the string that is expected for Azure queries
 func AzureShortAggToLong(agtype string) (string, error) {
 	switch agtype {
 	case "avg", "":
