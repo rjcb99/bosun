@@ -213,9 +213,6 @@ func AzureQuery(prefix string, e *State, T miniprofiler.Timer, namespace, metric
 	return r, nil
 }
 
-// $resources = azrt("Microsoft.Compute/virtualMachines")
-// azmulti("Percentage CPU", "", $resources, "max", "PT5M", "1h", "")
-
 // AzureMultiQuery queries multiple Azure resources and returns them as a single result set
 // It makes one HTTP request per resource and parallelizes the requests
 func AzureMultiQuery(prefix string, e *State, T miniprofiler.Timer, metric, tagKeysCSV string, resources AzureResources, agtype string, interval, sdur, edur string) (r *Results, err error) {

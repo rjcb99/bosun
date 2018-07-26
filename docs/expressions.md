@@ -95,7 +95,7 @@ We don't need to understand everything in this alert, but it is worth highlighti
 
 ## Azure Monitor Query Functions
 
-### az(namespace string, metric string, tagKeysCSV string, rsg string, resName string, agtype, interval, startDuration string, endDuration string) seriesSet
+### az(namespace string, metric string, tagKeysCSV string, rsg string, resName string, agType string, interval string, startDuration string, endDuration string) seriesSet
 {: .exprFunc}
 
 az queries the [Azure Monitor REST API](https://docs.microsoft.com/en-us/rest/api/monitor/) for time series data for a specific metric and resource. Responses will include at least to tags: `name=<resourceName>,rsg=<resourceGroupName>`. If the metric support multiple dimensions and tagKeysCSV is non-empty additional tag keys are added to the response.
@@ -133,7 +133,22 @@ The filter argument supports filter supports joining terms in `()` as well as th
  * `rsg:<regex>` where the resource group of the resource matches the resource. The term `resourcegroup` may also be used.
  * `otherText:<regex>` will match resources based on Azure tags. `otherText` would be the tag key and the regex will match against the tag's value. If the tag key does not exist on the resource then there will be no match.
 
-Regular expressions use Go's regular expressions which use the [RE2 syntax](https://github.com/google/re2/wiki/Syntax). If you want an exact match and not a substring be sure to anchor the term with something like `rsg:^myRSG$`
+Regular expressions use Go's regular expressions which use the [RE2 syntax](https://github.com/google/re2/wiki/Syntax). If you want an exact match and not a substring be sure to anchor the term with something like `rsg:^myRSG$`.
+
+### azmulti(metric string, tagKeysCSV string, resources AzureResources, agType string, interval string, startDuration string, endDuration string) seriesSet
+
+azmulti (Azure Multiple Query) queries a metric for multiple resources and returns them as a single series set. The arguments metric, tagKeysCSV, agType, interval, startDuration, and endDuration all behave the same as in the `az` function. Also like the `az` functions the result will be tagged with `rsg`, `name`, and any dimensions from tagKeysCSV.
+
+The resources argument is a list of resources (an azureResourcesType) as returned by `azrt` and `azrf`. 
+
+Each resource queried requires an Azure Monitor API call. So if there are 20 items in the set from return of the call, 20 calls are made that count toward the rate limit. This function exists because most metrics do not have dimensions on primary attributes like the machine name.
+
+Example: 
+
+```
+$resources = azrt("Microsoft.Compute/virtualMachines")
+azmulti("Percentage CPU", "", $resources, "max", "PT5M", "1h", "")
+```
 
 ## Graphite Query Functions
 
