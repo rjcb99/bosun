@@ -115,7 +115,25 @@ az queries the [Azure Monitor REST API](https://docs.microsoft.com/en-us/rest/ap
 
  `az("Microsoft.Compute/virtualMachines", "Per Disk Read Bytes/sec", "SlotId", "myResourceGroup", ""myFavoriteVM", "max", "PT5M", "1h", "")`
 
+### azrt(type string) azureResources
+{: .exprFunc}
 
+azrt (Azure Resources By Type) gets a list of Azure Resources that exist for a certain type. For example, `azrt("Microsoft.Compute/virtualMachines")` would return all virtualMachine resources. This list of resources can then be passed to `azrf()` (Azure Resource Filter) for additional filtering or to a query function that takes AzureResources as an argument like `azmulti()`.
+
+The underlying implementation of this fetches *all* resources and caches that information. So additional azrt calls within scheduled check cycle will not result in additional calls to Azure's API.
+
+### azrf(resources azureResources, filter string) azureResources
+{: .exprFunc}
+
+azrf (Azure Resource Filter) takes a resource list and filters it to less resources based on the filter. The resources argument would usually be an `azrt()` call or another `azrf` call.
+
+The filter argument supports filter supports joining terms in `()` as well as the `AND`, `OR`, and `!` operators. The following query terms are supported and are always in the format of something:something.
+
+ * `name:<regex>` where the resource name matches the regular expression. 
+ * `rsg:<regex>` where the resource group of the resource matches the resource. The term `resourcegroup` may also be used.
+ * `otherText:<regex>` will match resources based on Azure tags. `otherText` would be the tag key and the regex will match against the tag's value. If the tag key does not exist on the resource then there will be no match.
+
+Regular expressions use Go's regular expressions which use the [RE2 syntax](https://github.com/google/re2/wiki/Syntax). If you want an exact match and not a substring be sure to anchor the term with something like `rsg:^myRSG$`
 
 ## Graphite Query Functions
 

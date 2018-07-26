@@ -101,10 +101,7 @@ func AzureMetricDefinitions(prefix string, e *State, T miniprofiler.Timer, names
 	return
 }
 
-// az("Microsoft.Compute/virtualMachines", "Percentage CPU", "SRE-RSG", "SRE-Linux-Jump", "avg" "PT5M", "1h", "")
-// az("Microsoft.Compute/virtualMachines", "Per Disk Read Bytes/sec", "SlotId", "SRE-RSG", "SRE-Linux-Jump", "max", "PT5M", "1h", "")
-
-// AzureQuery queries an Azure monitor metric for the given resource and returns a series set
+// AzureQuery queries an Azure monitor metric for the given resource and returns a series set tagged by
 func AzureQuery(prefix string, e *State, T miniprofiler.Timer, namespace, metric, tagKeysCSV, rsg, resName, agtype, interval, sdur, edur string) (r *Results, err error) {
 	r = new(Results)
 	// Verify prefix is a defined resource and fetch the collection of clients
