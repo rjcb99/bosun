@@ -95,6 +95,12 @@ We don't need to understand everything in this alert, but it is worth highlighti
 
 ## Azure Monitor Query Functions
 
+These functions are considered *preview* as of August 2018. The names, signatures, and behavior of these functions might change as they are tested in real word usage.
+
+The Azure Monitor datasource queries Azure for metric and resource information. These requests are subject to the [Azure Resource Manager Request Limits](https://docs.microsoft.com/en-us/azure/azure-resource-manager/resource-manager-request-limits) so when using the `az` and `azmulti` functions you should be mindful of how many API calls your alerts are making given your configured check interval. Also using the historical testing feature to query multiple intervals of time could quickly eat through your request limit.
+
+Currently there is no special treatment or instrumentation of the rate limit by Bosun, other then errors are expected once the rate limit is hit.
+
 ### az(namespace string, metric string, tagKeysCSV string, rsg string, resName string, agType string, interval string, startDuration string, endDuration string) seriesSet
 {: .exprFunc}
 
