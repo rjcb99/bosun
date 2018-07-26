@@ -105,7 +105,7 @@ func AzureMetricDefinitions(prefix string, e *State, T miniprofiler.Timer, names
 // az("Microsoft.Compute/virtualMachines", "Per Disk Read Bytes/sec", "SlotId", "SRE-RSG", "SRE-Linux-Jump", "max", "PT5M", "1h", "")
 
 // AzureQuery queries an Azure monitor metric for the given resource and returns a series set
-func AzureQuery(prefix string, e *State, T miniprofiler.Timer, namespace, metric, tagKeysCSV, rsg, resource, agtype, interval, sdur, edur string) (r *Results, err error) {
+func AzureQuery(prefix string, e *State, T miniprofiler.Timer, namespace, metric, tagKeysCSV, rsg, resName, agtype, interval, sdur, edur string) (r *Results, err error) {
 	r = new(Results)
 	// Verify prefix is a defined resource and fetch the collection of clients
 	cc, clientFound := e.Backends.AzureMonitor[prefix]
@@ -151,10 +151,10 @@ func AzureQuery(prefix string, e *State, T miniprofiler.Timer, namespace, metric
 	if err != nil {
 		return
 	}
-	cacheKey := strings.Join([]string{prefix, namespace, metric, tagKeysCSV, rsg, resource, agtype, interval, st, en}, ":")
+	cacheKey := strings.Join([]string{prefix, namespace, metric, tagKeysCSV, rsg, resName, agtype, interval, st, en}, ":")
 	// Function to fetch Azure Metric values
 	getFn := func() (interface{}, error) {
-		resp, err := c.List(context.Background(), azResourceURI(c.SubscriptionID, rsg, namespace, resource),
+		resp, err := c.List(context.Background(), azResourceURI(c.SubscriptionID, rsg, namespace, resName),
 			fmt.Sprintf("%s/%s", st, en),
 			tg,
 			metric,
@@ -188,7 +188,7 @@ func AzureQuery(prefix string, e *State, T miniprofiler.Timer, namespace, metric
 				series := make(Series)
 				tags := make(opentsdb.TagSet)
 				tags["rsg"] = rsg
-				tags["name"] = resource
+				tags["name"] = resName
 				// Get the Key/Values that make up the azure dimension and turn them into tags
 				if dataContainer.Metadatavalues != nil {
 					for _, md := range *dataContainer.Metadatavalues {
@@ -220,7 +220,7 @@ func AzureQuery(prefix string, e *State, T miniprofiler.Timer, namespace, metric
 // azmulti("Percentage CPU", "", $resources, "max", "PT5M", "1h", "")
 
 // AzureMultiQuery queries multiple Azure resources and returns them as a single result set
-// It makes one HTTP request per resource and parallelizes the requests 
+// It makes one HTTP request per resource and parallelizes the requests
 func AzureMultiQuery(prefix string, e *State, T miniprofiler.Timer, metric, tagKeysCSV string, resources AzureResources, agtype string, interval, sdur, edur string) (r *Results, err error) {
 	r = new(Results)
 	queryResults := []*Results{}
@@ -460,6 +460,8 @@ func AzureShortAggToLong(agtype string) (string, error) {
 		return string(insights.Maximum), nil
 	case "total":
 		return string(insights.Total), nil
+	case "count":
+		return string(insights.Count), nil
 	}
 	return "", fmt.Errorf("unrecognized aggregation type %s, must be avg, min, max, or total", agtype)
 }

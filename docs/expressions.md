@@ -93,6 +93,30 @@ We don't need to understand everything in this alert, but it is worth highlighti
 
 # Query Functions
 
+## Azure Monitor Query Functions
+
+### az(namespace string, metric string, tagKeysCSV string, rsg string, resName string, agtype, interval, startDuration string, endDuration string) seriesSet
+{: .exprFunc}
+
+az queries the [Azure Monitor REST API](https://docs.microsoft.com/en-us/rest/api/monitor/) for time series data for a specific metric and resource. Responses will include at least to tags: `name=<resourceName>,rsg=<resourceGroupName>`. If the metric support multiple dimensions and tagKeysCSV is non-empty additional tag keys are added to the response.
+
+ * `namespace` is the Azure namespace that the metric lives under. [Supported metric with Azure montior](https://docs.microsoft.com/en-us/azure/monitoring-and-diagnostics/monitoring-supported-metrics) contains a list of those namespaces, for example `Microsoft.Cache/redis` and `Microsoft.Compute/virtualMachines`.
+ * `metric` is the name of the metric under the corresponding `namespace` that you want to query, for example `Percentage CPU`.
+ * `tagKeysCSV` is comma-separated list of dimension keys that you want the response to group by. For example, the `Per Disk Read Bytes/sec` metric under `Microsoft.Compute/virtualMachines` has a SlotId metric, so if you pass `"SlotId"` for this argument `SlotId` will become a tag key in the response with the values corresponding to each slot (i.e `0`)
+ * `rsg` is the name of the Azure resource group that the resource is in
+ * `resName` is the name of the resource
+ * `agType` is the type of aggregation to use can be `avg`, `min`, `max`, `total` or `count`.
+ * `interval` is the azure timegrain to use. Common timegrains are `PT1M`, `PT5M`, `PT15M`, `PT30M`, `PT1H`, `PT6H`, `PT12H`, and `PT1D`. 
+ * `startDuration` and `endDuration` set the time window from now - see the OpenTSDB q() function for more details
+
+ Examples:
+
+ `az("Microsoft.Compute/virtualMachines", "Percentage CPU", "", "myResourceGroup", "myFavoriteVM", "avg", "PT5M", "1h", "")`
+
+ `az("Microsoft.Compute/virtualMachines", "Per Disk Read Bytes/sec", "SlotId", "myResourceGroup", ""myFavoriteVM", "max", "PT5M", "1h", "")`
+
+
+
 ## Graphite Query Functions
 
 ### graphite(query string, startDuration string, endDuration string, format string) seriesSet
