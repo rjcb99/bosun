@@ -317,6 +317,12 @@ For expressions that need to make multiple http requests like `azmulti()`, this 
 
 This is an optional parameter, If not set or set to `0` then it will be the default value of `10` workers. A value of `1` means no concurrency since there will only be one worker.
 
+#### DebugRequest
+If set to `true` then HTTP requests to the Azure API's will be logged to stdout. This is an optional parameter with a default of `false`.
+
+#### DebugResponse
+If set to `true` then HTTP responses from Azure API's will be logged to stdout. This is an optional parameter with a default of `false`.
+
 #### Example
 
 ```

@@ -3,7 +3,6 @@ package conf
 import (
 	"bytes"
 	"fmt"
-	"log"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -157,6 +156,8 @@ type AzureMonitorConf struct {
 	ClientId       string
 	ClientSecret   string
 	Concurrency    int
+	DebugRequest   bool
+	DebugResponse  bool
 }
 
 // Valid returns if the configuration for the AzureMonitor
@@ -614,10 +615,12 @@ func (sc *SystemConf) GetAzureMonitorContext() expr.AzureMonitorClients {
 		clients.MetricsClient = insights.NewMetricsClient(conf.SubscriptionId)
 		clients.MetricDefinitionsClient = insights.NewMetricDefinitionsClient(conf.SubscriptionId)
 		clients.ResourcesClient = resources.NewClient(conf.SubscriptionId)
-		//clients.ResourcesClient.RequestInspector = LogRequest()
-		//clients.ResourcesClient.ResponseInspector = LogResponse()
-		//clients.MetricsClient.RequestInspector, clients.MetricDefinitionsClient.RequestInspector = LogRequest(), LogRequest()
-		//clients.MetricsClient.ResponseInspector, clients.MetricDefinitionsClient.ResponseInspector = LogResponse(), LogResponse()
+		if conf.DebugRequest {
+			clients.ResourcesClient.RequestInspector, clients.MetricsClient.RequestInspector, clients.MetricDefinitionsClient.RequestInspector = azureLogRequest(), azureLogRequest(), azureLogRequest()
+		}
+		if conf.DebugResponse {
+			clients.ResourcesClient.ResponseInspector, clients.MetricsClient.ResponseInspector, clients.MetricDefinitionsClient.ResponseInspector = azureLogResponse(), azureLogResponse(), azureLogResponse()
+		}
 		ccc := auth.NewClientCredentialsConfig(conf.ClientId, conf.ClientSecret, conf.TenantId)
 		at, err := ccc.Authorizer()
 		if err != nil {
@@ -631,29 +634,29 @@ func (sc *SystemConf) GetAzureMonitorContext() expr.AzureMonitorClients {
 	return allClients
 }
 
-func LogRequest() autorest.PrepareDecorator {
+func azureLogRequest() autorest.PrepareDecorator {
 	return func(p autorest.Preparer) autorest.Preparer {
 		return autorest.PreparerFunc(func(r *http.Request) (*http.Request, error) {
 			r, err := p.Prepare(r)
 			if err != nil {
-				log.Println(err)
+				slog.Warningf("failure to dump azure request: %v", err)
 			}
 			dump, _ := httputil.DumpRequestOut(r, true)
-			log.Println(string(dump))
+			slog.Info(string(dump))
 			return r, err
 		})
 	}
 }
 
-func LogResponse() autorest.RespondDecorator {
+func azureLogResponse() autorest.RespondDecorator {
 	return func(p autorest.Responder) autorest.Responder {
 		return autorest.ResponderFunc(func(r *http.Response) error {
 			err := p.Respond(r)
 			if err != nil {
-				log.Println(err)
+				slog.Warningf("failure to dump azure request: %v", err)
 			}
 			dump, _ := httputil.DumpResponse(r, true)
-			log.Println(string(dump))
+			slog.Info(string(dump))
 			return err
 		})
 	}
