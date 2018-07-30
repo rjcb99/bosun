@@ -254,14 +254,21 @@ func AzureQuery(prefix string, e *State, T miniprofiler.Timer, namespace, metric
 // It makes one HTTP request per resource and parallelizes the requests
 func AzureMultiQuery(prefix string, e *State, T miniprofiler.Timer, metric, tagKeysCSV string, resources AzureResources, agtype string, interval, sdur, edur string) (r *Results, err error) {
 	r = new(Results)
+	if resources.Prefix != prefix {
+		return r, fmt.Errorf(`mismatched Azure clients: attempting to use resources from client "%v" on a query with client "%v"`, resources.Prefix, prefix)
+	}
+	nResources := len(resources.Resources)
+	if nResources == 0 {
+		return r, nil
+	}
 	queryResults := []*Results{}
 	var wg sync.WaitGroup
-	// reqCh (Request Channel) is populated with azure resources, and resources are pulled from channel to make a time series request per resource
-	reqCh := make(chan AzureResource, len(resources))
+	// reqCh (Request Channel) is populated with Azure resources, and resources are pulled from channel to make a time series request per resource
+	reqCh := make(chan AzureResource, nResources)
 	// resCh (Result Channel) contains the timeseries responses for requests for resource
-	resCh := make(chan *Results, len(resources))
+	resCh := make(chan *Results, nResources)
 	// errCh (Error Channel) contains any request errors
-	errCh := make(chan error, len(resources))
+	errCh := make(chan error, nResources)
 	// a worker makes a time series request for a resource
 	worker := func() {
 		for resource := range reqCh {
@@ -276,10 +283,10 @@ func AzureMultiQuery(prefix string, e *State, T miniprofiler.Timer, metric, tagK
 		wg.Add(1)
 		go worker()
 	}
-	timingString := fmt.Sprintf(`%v queries for metric:"%v" using client "%v"`, len(resources), metric, prefix)
+	timingString := fmt.Sprintf(`%v queries for metric:"%v" using client "%v"`, nResources, metric, prefix)
 	T.StepCustomTiming("azure", "query-multi", timingString, func() {
 		// Feed resources into the request channel which the workers will consume
-		for _, resource := range resources {
+		for _, resource := range resources.Resources {
 			reqCh <- resource
 		}
 		close(reqCh)
@@ -316,7 +323,7 @@ func azureListResources(prefix string, e *State, T miniprofiler.Timer) (AzureRes
 	key := fmt.Sprintf("AzureResourceCache:%s:%s", prefix, time.Now().Truncate(time.Minute*1)) // https://github.com/golang/groupcache/issues/92
 	// getFn is a cacheable function for listing azure resources
 	getFn := func() (interface{}, error) {
-		r := AzureResources{}
+		r := AzureResources{Prefix: prefix}
 		cc, clientFound := e.Backends.AzureMonitor[prefix]
 		if !clientFound {
 			return r, fmt.Errorf("azure client with name %v not defined", prefix)
@@ -342,7 +349,7 @@ func azureListResources(prefix string, e *State, T miniprofiler.Timer) (AzureRes
 						azTags[k] = *v
 					}
 				}
-				r = append(r, AzureResource{
+				r.Resources = append(r.Resources, AzureResource{
 					Name:          *val.Name,
 					Type:          *val.Type,
 					ResourceGroup: splitID[4],
@@ -362,15 +369,15 @@ func azureListResources(prefix string, e *State, T miniprofiler.Timer) (AzureRes
 // AzureResourcesByType returns all resources of the specified type
 // It fetches the complete list resources and then filters them relying on a Cache of that resource list
 func AzureResourcesByType(prefix string, e *State, T miniprofiler.Timer, tp string) (r *Results, err error) {
-	resources := AzureResources{}
+	resources := AzureResources{Prefix: prefix}
 	r = new(Results)
 	allResources, err := azureListResources(prefix, e, T)
 	if err != nil {
 		return
 	}
-	for _, res := range allResources {
+	for _, res := range allResources.Resources {
 		if res.Type == tp {
-			resources = append(resources, res)
+			resources.Resources = append(resources.Resources, res)
 		}
 	}
 	r.Results = append(r.Results, &Result{Value: resources})
@@ -385,14 +392,14 @@ func AzureFilterResources(e *State, T miniprofiler.Timer, resources AzureResourc
 	if err != nil {
 		return r, err
 	}
-	filteredResources := AzureResources{}
-	for _, res := range resources {
+	filteredResources := AzureResources{Prefix: resources.Prefix}
+	for _, res := range resources.Resources {
 		match, err := boolq.AskParsedExpr(bqf, res)
 		if err != nil {
 			return r, err
 		}
 		if match {
-			filteredResources = append(filteredResources, res)
+			filteredResources.Resources = append(filteredResources.Resources, res)
 		}
 	}
 	r.Results = append(r.Results, &Result{Value: filteredResources})
@@ -408,7 +415,11 @@ type AzureResource struct {
 }
 
 // AzureResources is a slice of AzureResource
-type AzureResources []AzureResource
+//type AzureResources []AzureResource
+type AzureResources struct {
+	Resources []AzureResource
+	Prefix    string
+}
 
 // Ask makes an AzureResource a github.com/kylebrandt/boolq Asker, which allows it to
 // to take boolean expressions to create conditions
