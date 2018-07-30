@@ -315,7 +315,7 @@ The Azure generated secret for tor the client. This will be under Settings :: Ke
 #### Concurrency
 For expressions that need to make multiple http requests like `azmulti()`, this sets the amount of concurrent http requests that will be made at a time. In other words, the number of request workers.
 
-This is an optional parameter, If not set the default value is `10`, if set the value must be `1` or greater.
+This is an optional parameter, If not set or set to `0` then it will be the default value of `10` workers. A value of `1` means no concurrency since there will only be one worker.
 
 #### Example
 

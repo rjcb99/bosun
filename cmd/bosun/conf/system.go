@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"strings"
 	"time"
 
 	"bosun.org/slog"
@@ -158,6 +159,38 @@ type AzureMonitorConf struct {
 	Concurrency    int
 }
 
+// Valid returns if the configuration for the AzureMonitor
+func (ac AzureMonitorConf) Valid() error {
+	present := make(map[string]bool)
+	missing := []string{}
+	errors := []string{}
+	present["SubscriptionId"] = ac.SubscriptionId != ""
+	present["TenantId"] = ac.TenantId != ""
+	present["ClientId"] = ac.ClientId != ""
+	present["ClientSecret"] = ac.ClientSecret != ""
+	for k, v := range present {
+		if !v {
+			missing = append(missing, k)
+		}
+	}
+	if len(missing) != 0 {
+		errors = append(errors, fmt.Sprintf("missing required fields: %v", strings.Join(missing, ", ")))
+	} else {
+		ccc := auth.NewClientCredentialsConfig(ac.ClientId, ac.ClientSecret, ac.TenantId)
+		_, err := ccc.Authorizer() // We don't use the value here, only checking for error
+		if err != nil {
+			errors = append(errors, fmt.Sprintf("problem creating valid authorization: %v", err.Error()))
+		}
+	}
+	if ac.Concurrency < 0 {
+		errors = append(errors, fmt.Sprintf("concurrency is %v and must be 0 or greater", ac.Concurrency))
+	}
+	if len(errors) != 0 {
+		return fmt.Errorf("%v", strings.Join(errors, " and "))
+	}
+	return nil
+}
+
 // InfluxConf contains configuration for an influx host that Bosun can query
 type InfluxConf struct {
 	URL       string
@@ -300,6 +333,13 @@ func loadSystemConfig(conf string, isFileName bool) (*SystemConf, error) {
 
 	if sc.AnnotateConf.SimpleClient && sc.AnnotateConf.ClientOptions.Enabled {
 		return sc, fmt.Errorf("Can't use both ES SimpleClient and ES ClientOptions please remove or disable one in AnnotateConf: %#v", sc.AnnotateConf)
+	}
+
+	// Check Azure Monitor Configurations
+	for prefix, conf := range sc.AzureMonitorConf {
+		if err := conf.Valid(); err != nil {
+			return sc, fmt.Errorf(`error in configuration for Azure client "%v": %v`, prefix, err)
+		}
 	}
 
 	sc.md = decodeMeta
@@ -565,14 +605,9 @@ func (sc *SystemConf) GetElasticContext() expr.ElasticHosts {
 func (sc *SystemConf) GetAzureMonitorContext() expr.AzureMonitorClients {
 	allClients := make(expr.AzureMonitorClients)
 	for prefix, conf := range sc.AzureMonitorConf {
-		if conf.SubscriptionId == "" || conf.TenantId == "" || conf.ClientId == "" || conf.ClientId == "" {
-			slog.Fatalf("one of required SubscriptionId, TenantId, ClientId, or ClientSecret is not set for Azure client %v", prefix)
-		}
 		clients := expr.AzureMonitorClientCollection{}
 		if conf.Concurrency == 0 {
 			clients.Concurrency = 10
-		} else if conf.Concurrency < 1 {
-			slog.Fatal("value for azure concurrency must be 1 or greater")
 		} else {
 			clients.Concurrency = conf.Concurrency
 		}
@@ -586,7 +621,9 @@ func (sc *SystemConf) GetAzureMonitorContext() expr.AzureMonitorClients {
 		ccc := auth.NewClientCredentialsConfig(conf.ClientId, conf.ClientSecret, conf.TenantId)
 		at, err := ccc.Authorizer()
 		if err != nil {
-			slog.Fatal("azure conf: ", err)
+			// Should not hit this since we check for authorizer errors in Validation
+			// This is checked before because this method is not called until the an expression is called
+			slog.Fatal("Azure conf: ", err)
 		}
 		clients.MetricsClient.Authorizer, clients.MetricDefinitionsClient.Authorizer, clients.ResourcesClient.Authorizer = at, at, at
 		allClients[prefix] = clients
