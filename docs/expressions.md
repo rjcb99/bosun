@@ -97,9 +97,21 @@ We don't need to understand everything in this alert, but it is worth highlighti
 
 These functions are considered *preview* as of August 2018. The names, signatures, and behavior of these functions might change as they are tested in real word usage.
 
-The Azure Monitor datasource queries Azure for metric and resource information. These requests are subject to the [Azure Resource Manager Request Limits](https://docs.microsoft.com/en-us/azure/azure-resource-manager/resource-manager-request-limits) so when using the `az` and `azmulti` functions you should be mindful of how many API calls your alerts are making given your configured check interval. Also using the historical testing feature to query multiple intervals of time could quickly eat through your request limit.
+The Azure Monitor datasource queries Azure for metric and resource information. These functions are available when [AzureMonitorConf](#system-configuration#azuremonitorconf) is defined in the system configuration. 
 
-Currently there is no special treatment or instrumentation of the rate limit by Bosun, other then errors are expected once the rate limit is hit.
+These requests are subject to the [Azure Resource Manager Request Limits](https://docs.microsoft.com/en-us/azure/azure-resource-manager/resource-manager-request-limits) so when using the `az` and `azmulti` functions you should be mindful of how many API calls your alerts are making given your configured check interval. Also using the historical testing feature to query multiple intervals of time could quickly eat through your request limit.
+
+Currently there is no special treatment or instrumentation of the rate limit by Bosun, other then errors are expected once the rate limit is hit and warning will be logged when a request responses with less than 100 reads remaining.
+
+### PrefixKey
+
+PrefixKey is a quoted string used to query Azure with different clients from a single instance of Bosun. It can be passed as a prefix to Azure query functions as in the example below. If there is no prefix used then the query will be made on default Azure client.
+
+```
+$resources = ["foo"]azrt("Microsoft.Compute/virtualMachines")
+$filteresRes = azrf($resources, "client:.*")
+["foo"]azmulti("Percentage CPU", "", $resources, "max", "5m", "1h", "")
+```
 
 ### az(namespace string, metric string, tagKeysCSV string, rsg string, resName string, agType string, interval string, startDuration string, endDuration string) seriesSet
 {: .exprFunc}
@@ -126,6 +138,8 @@ az queries the [Azure Monitor REST API](https://docs.microsoft.com/en-us/rest/ap
 
 azrt (Azure Resources By Type) gets a list of Azure Resources that exist for a certain type. For example, `azrt("Microsoft.Compute/virtualMachines")` would return all virtualMachine resources. This list of resources can then be passed to `azrf()` (Azure Resource Filter) for additional filtering or to a query function that takes AzureResources as an argument like `azmulti()`.
 
+An error will be returned if you attempt to pass resources fetched for an Azure client with a different client.  In other words, if the resources call (e.g. `azrt()`) uses a different prefix from the time series query (e.g. `azmulti()`)).
+
 The underlying implementation of this fetches *all* resources and caches that information. So additional azrt calls within scheduled check cycle will not result in additional calls to Azure's API.
 
 ### azrf(resources azureResources, filter string) azureResources
@@ -140,6 +154,17 @@ The filter argument supports filter supports joining terms in `()` as well as th
  * `otherText:<regex>` will match resources based on Azure tags. `otherText` would be the tag key and the regex will match against the tag's value. If the tag key does not exist on the resource then there will be no match.
 
 Regular expressions use Go's regular expressions which use the [RE2 syntax](https://github.com/google/re2/wiki/Syntax). If you want an exact match and not a substring be sure to anchor the term with something like `rsg:^myRSG$`.
+
+Example:
+
+```
+$resources = azrt("Microsoft.Compute/virtualMachines")
+# Filter resources to those with client azure tag that has any value
+$filteresRes = azrf($resources, "client:.*")
+azmulti("Percentage CPU", "", $filteredRes, "max", "5m", "1h", "")
+```
+
+Note that `azrf()` does not take a prefix key since it is filtering resources that have already been retrieved. The resulting azureResources will still be associated with the correct client/prefix.
 
 ### azmulti(metric string, tagKeysCSV string, resources AzureResources, agType string, interval string, startDuration string, endDuration string) seriesSet
 

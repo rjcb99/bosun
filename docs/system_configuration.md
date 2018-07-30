@@ -294,10 +294,10 @@ Outgoing SMTP server hostname or IP address.
 	Host = "mail.example.com"
 ```
 
-### AzureConf
+### AzureMonitorConf
 AzureConf enables [Azure Monitor specific functions](/expressions#azure-monitor-query-functions) in the expression language. Multiple clients may be defined allowing you to query different subscriptions and tenants from a single Bosun instance.
 
-#### AzureConf.default
+#### AzureMonitorConf.default
 Default Azure client to use when the Prefix key is absent or is there and set to "default". When ysing multiple clients the string `default` can change to whatever you want to use in expressions to access this particular client.
 
 #### SubscriptionId

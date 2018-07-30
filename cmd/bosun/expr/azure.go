@@ -447,7 +447,9 @@ func (ar AzureResource) Ask(filter string) (bool, error) {
 		if re.MatchString(ar.ResourceGroup) {
 			return true, nil
 		}
-	default: // Does not support tags that have a tag key of rsg, resourcegroup, or name
+	default:
+		// Does not support tags that have a tag key of rsg, resourcegroup, or name. If it is a problem at some point
+		// we can do something like "\name" to mean the tag "name" if such thing is even allowed
 		if tagV, ok := ar.Tags[key]; ok {
 			re, err := regexp.Compile(value)
 			if err != nil {
