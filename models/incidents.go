@@ -225,7 +225,7 @@ const (
 	TypeESQuery
 	TypeESIndexer
 	TypeNumberExpr
-	TypeSeriesExpr // No implmentation yet
+	TypeSeriesExpr // No implementation yet
 	TypeTable
 	TypeVariantSet
 	TypeAzureResourceList

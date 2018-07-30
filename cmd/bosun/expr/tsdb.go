@@ -77,7 +77,7 @@ func timeTSDBRequest(e *State, T miniprofiler.Timer, req *opentsdb.Request) (s o
 	b, _ := json.MarshalIndent(req, "", "  ")
 	tries := 1
 	for {
-		T.StepCustomTiming("tsdb", "query", string(b), func() {
+		T.StepCustomTiming("tsdb", "query-ts", string(b), func() {
 			getFn := func() (interface{}, error) {
 				return e.TSDBContext.Query(req)
 			}

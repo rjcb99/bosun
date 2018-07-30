@@ -73,7 +73,6 @@ func azureTags(arg parse.Node) (parse.Tags, error) {
 	for _, k := range csvTags {
 		tags[k] = struct{}{}
 	}
-	fmt.Println(tags)
 	return tags, nil
 }
 
@@ -173,7 +172,7 @@ func AzureQuery(prefix string, e *State, T miniprofiler.Timer, namespace, metric
 	cacheKey := strings.Join([]string{prefix, namespace, metric, tagKeysCSV, rsg, resName, agtype, interval, st, en}, ":")
 	// Function to fetch Azure Metric values
 	getFn := func() (interface{}, error) {
-		resp, err := c.List(context.Background(), azResourceURI(c.SubscriptionID, rsg, namespace, resName),
+		req, err := c.ListPreparer(context.Background(), azResourceURI(c.SubscriptionID, rsg, namespace, resName),
 			fmt.Sprintf("%s/%s", st, en),
 			tg,
 			metric,
@@ -184,9 +183,18 @@ func AzureQuery(prefix string, e *State, T miniprofiler.Timer, namespace, metric
 			insights.Data,
 			namespace)
 		if err != nil {
-			return resp, err
+			return nil, err
 		}
-		return resp, nil
+		var resp insights.Response
+		T.StepCustomTiming("azure", "query", req.URL.String(), func() {
+			hr, sendErr := c.ListSender(req)
+			if sendErr == nil {
+				resp, err = c.ListResponder(hr)
+			} else {
+				err = sendErr
+			}
+		})
+		return resp, err
 	}
 	// Get azure metric values by calling azure or via cache if available
 	val, err := e.Cache.Get(cacheKey, getFn)
@@ -271,11 +279,14 @@ func AzureMultiQuery(prefix string, e *State, T miniprofiler.Timer, metric, tagK
 		go worker()
 	}
 	// Feed resources into the request channel which the workers will consume
-	for _, resource := range resources {
-		reqCh <- resource
-	}
-	close(reqCh)
-	wg.Wait() // Wait for all the workers to finish
+	timingString := fmt.Sprintf(`%v queries for metric:"%v" using client "%v"`, len(resources), metric, prefix)
+	T.StepCustomTiming("azure", "query-multi", timingString, func() {
+		for _, resource := range resources {
+			reqCh <- resource
+		}
+		close(reqCh)
+		wg.Wait() // Wait for all the workers to finish
+	})
 	close(resCh)
 	close(errCh)
 
