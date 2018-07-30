@@ -307,10 +307,10 @@ The Azure Subscription GUID for the client. See [Getting your Azure Subscription
 The Azure Tenant GUID for the client. To get the tenant you can access it via "Azure Active Directory > Properties > Directory ID in the Azure portal" as per Azure's [How to get an Azure Active Directory tenant documentation](https://docs.microsoft.com/en-us/azure/active-directory/develop/active-directory-howto-tenant).
 
 #### ClientId
-The Azure Client GUID for the client.
+The Azure Client GUID for the client. This will be the GUID listed as the "Application ID" when you get when create the app registration under Azure Active Directory.
 
 #### ClientSecret
-The Azure generated secret for tor the client.
+The Azure generated secret for tor the client. This will be under Settings :: Keys for the application as referenced in ClientID above.
 
 #### Concurrency
 For expressions that need to make multiple http requests like `azmulti()`, this sets the amount of concurrent http requests that will be made at a time. In other words, the number of request workers.

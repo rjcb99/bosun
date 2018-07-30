@@ -161,11 +161,11 @@ func AzureQuery(prefix string, e *State, T miniprofiler.Timer, namespace, metric
 	// Set the Interval/Timegrain (Azure metric downsampling)
 	var tg *string
 	if interval != "" {
-		tg = &interval
+		tg = azureIntervalToTimegrain(interval)
 	}
 
 	// Set azure aggregation method
-	aggLong, err := AzureShortAggToLong(agtype)
+	aggLong, err := azureShortAggToLong(agtype)
 	if err != nil {
 		return
 	}
@@ -178,7 +178,7 @@ func AzureQuery(prefix string, e *State, T miniprofiler.Timer, namespace, metric
 			metric,
 			aggLong,
 			nil,
-			"asc",
+			"",
 			filter,
 			insights.Data,
 			namespace)
@@ -232,7 +232,7 @@ func AzureQuery(prefix string, e *State, T miniprofiler.Timer, namespace, metric
 					}
 				}
 				for _, mValue := range *dataContainer.Data {
-					exValue := AzureExtractMetricValue(&mValue, aggLong)
+					exValue := azureExtractMetricValue(&mValue, aggLong)
 					if exValue != nil && mValue.TimeStamp != nil {
 						series[mValue.TimeStamp.ToTime()] = *exValue
 					}
@@ -308,9 +308,9 @@ func AzureMultiQuery(prefix string, e *State, T miniprofiler.Timer, metric, tagK
 	return
 }
 
-// AzureListResources fetches all resources for the tenant/subscription and caches them for
+// azureListResources fetches all resources for the tenant/subscription and caches them for
 // up to one minute.
-func AzureListResources(prefix string, e *State, T miniprofiler.Timer) (AzureResources, error) {
+func azureListResources(prefix string, e *State, T miniprofiler.Timer) (AzureResources, error) {
 	// Cache will only last for one minute. In practice this will only apply for web sessions since a
 	// new cache is created for each check cycle in the cache
 	key := fmt.Sprintf("AzureResourceCache:%s:%s", prefix, time.Now().Truncate(time.Minute*1)) // https://github.com/golang/groupcache/issues/92
@@ -364,7 +364,7 @@ func AzureListResources(prefix string, e *State, T miniprofiler.Timer) (AzureRes
 func AzureResourcesByType(prefix string, e *State, T miniprofiler.Timer, tp string) (r *Results, err error) {
 	resources := AzureResources{}
 	r = new(Results)
-	allResources, err := AzureListResources(prefix, e, T)
+	allResources, err := azureListResources(prefix, e, T)
 	if err != nil {
 		return
 	}
@@ -467,7 +467,7 @@ type AzureMonitorClients map[string]AzureMonitorClientCollection
 
 // AzureExtractMetricValue is a helper for fetching the value of the requested
 // aggregation for the metric
-func AzureExtractMetricValue(mv *insights.MetricValue, field string) (v *float64) {
+func azureExtractMetricValue(mv *insights.MetricValue, field string) (v *float64) {
 	switch field {
 	case string(insights.Average), "":
 		v = mv.Average
@@ -481,9 +481,9 @@ func AzureExtractMetricValue(mv *insights.MetricValue, field string) (v *float64
 	return
 }
 
-// AzureShortAggToLong coverts bosun style names for aggregations (like the reduction functions)
+// azureShortAggToLong coverts bosun style names for aggregations (like the reduction functions)
 // to the string that is expected for Azure queries
-func AzureShortAggToLong(agtype string) (string, error) {
+func azureShortAggToLong(agtype string) (string, error) {
 	switch agtype {
 	case "avg", "":
 		return string(insights.Average), nil
@@ -497,4 +497,11 @@ func AzureShortAggToLong(agtype string) (string, error) {
 		return string(insights.Count), nil
 	}
 	return "", fmt.Errorf("unrecognized aggregation type %s, must be avg, min, max, or total", agtype)
+}
+
+// azureIntervalToTimegrain adds a PT prefix and upper cases the argument to
+// make the string in the format of Azure Timegrain
+func azureIntervalToTimegrain(s string) *string {
+	tg := fmt.Sprintf("PT%v", strings.ToUpper(s))
+	return &tg
 }

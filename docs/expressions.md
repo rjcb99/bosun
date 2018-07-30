@@ -112,14 +112,14 @@ az queries the [Azure Monitor REST API](https://docs.microsoft.com/en-us/rest/ap
  * `rsg` is the name of the Azure resource group that the resource is in
  * `resName` is the name of the resource
  * `agType` is the type of aggregation to use can be `avg`, `min`, `max`, `total` or `count`.
- * `interval` is the azure timegrain to use. Common timegrains are `PT1M`, `PT5M`, `PT15M`, `PT30M`, `PT1H`, `PT6H`, `PT12H`, and `PT1D`. 
+ * `interval` is the Azure timegrain to use without "PT" and in lower case (ISO 8601 duration format). Common supported timegrains are `1m`, `5m`, `15m`, `30m`, `1h`, `6h`, `12h`, and `1d`. 
  * `startDuration` and `endDuration` set the time window from now - see the OpenTSDB q() function for more details
 
  Examples:
 
- `az("Microsoft.Compute/virtualMachines", "Percentage CPU", "", "myResourceGroup", "myFavoriteVM", "avg", "PT5M", "1h", "")`
+ `az("Microsoft.Compute/virtualMachines", "Percentage CPU", "", "myResourceGroup", "myFavoriteVM", "avg", "5m", "1h", "")`
 
- `az("Microsoft.Compute/virtualMachines", "Per Disk Read Bytes/sec", "SlotId", "myResourceGroup", "myFavoriteVM", "max", "PT5M", "1h", "")`
+ `az("Microsoft.Compute/virtualMachines", "Per Disk Read Bytes/sec", "SlotId", "myResourceGroup", "myFavoriteVM", "max", "5m", "1h", "")`
 
 ### azrt(type string) azureResources
 {: .exprFunc}
