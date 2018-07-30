@@ -200,10 +200,11 @@ func AzureQuery(prefix string, e *State, T miniprofiler.Timer, namespace, metric
 		return resp, err
 	}
 	// Get azure metric values by calling azure or via cache if available
-	val, err := e.Cache.Get(cacheKey, getFn)
+	val, err, hit := e.Cache.Get(cacheKey, getFn)
 	if err != nil {
 		return r, err
 	}
+	collectCacheHit(e.Cache.Name, "azure_ts", hit)
 	resp := val.(insights.Response)
 	rawReadsRemaining := resp.Header.Get("X-Ms-Ratelimit-Remaining-Subscription-Reads")
 	readsRemaining, err := strconv.ParseInt(rawReadsRemaining, 10, 64)
@@ -364,7 +365,8 @@ func azureListResources(prefix string, e *State, T miniprofiler.Timer) (AzureRes
 		}
 		return r, nil
 	}
-	val, err := e.Cache.Get(key, getFn)
+	val, err, hit := e.Cache.Get(key, getFn)
+	collectCacheHit(e.Cache.Name, "azure_resource", hit)
 	if err != nil {
 		return AzureResources{}, err
 	}
