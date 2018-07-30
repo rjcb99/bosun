@@ -228,7 +228,7 @@ func AzureQuery(prefix string, e *State, T miniprofiler.Timer, namespace, metric
 					for _, md := range *dataContainer.Metadatavalues {
 						if md.Name != nil && md.Name.Value != nil && md.Value != nil {
 							tags[*md.Name.Value] = *md.Value
-						} // TODO: Else?
+						}
 					}
 				}
 				for _, mValue := range *dataContainer.Data {
@@ -255,14 +255,12 @@ func AzureQuery(prefix string, e *State, T miniprofiler.Timer, namespace, metric
 func AzureMultiQuery(prefix string, e *State, T miniprofiler.Timer, metric, tagKeysCSV string, resources AzureResources, agtype string, interval, sdur, edur string) (r *Results, err error) {
 	r = new(Results)
 	queryResults := []*Results{}
-
-	workerConcurrency := 5 // TODO take this from configuration
 	var wg sync.WaitGroup
 	// reqCh (Request Channel) is populated with azure resources, and resources are pulled from channel to make a time series request per resource
 	reqCh := make(chan AzureResource, len(resources))
 	// resCh (Result Channel) contains the timeseries responses for requests for resource
 	resCh := make(chan *Results, len(resources))
-	// errCh (Error Channel) contains any errors from requests for
+	// errCh (Error Channel) contains any request errors
 	errCh := make(chan error, len(resources))
 	// a worker makes a time series request for a resource
 	worker := func() {
@@ -274,13 +272,13 @@ func AzureMultiQuery(prefix string, e *State, T miniprofiler.Timer, metric, tagK
 		defer wg.Done()
 	}
 	// Create N workers to parallelize multiple requests at once since he resource requires an HTTP request
-	for i := 0; i < workerConcurrency; i++ {
+	for i := 0; i < e.AzureMonitor[prefix].Concurrency; i++ {
 		wg.Add(1)
 		go worker()
 	}
-	// Feed resources into the request channel which the workers will consume
 	timingString := fmt.Sprintf(`%v queries for metric:"%v" using client "%v"`, len(resources), metric, prefix)
 	T.StepCustomTiming("azure", "query-multi", timingString, func() {
+		// Feed resources into the request channel which the workers will consume
 		for _, resource := range resources {
 			reqCh <- resource
 		}
@@ -459,6 +457,7 @@ type AzureMonitorClientCollection struct {
 	MetricsClient           insights.MetricsClient
 	MetricDefinitionsClient insights.MetricDefinitionsClient
 	ResourcesClient         resources.Client
+	Concurrency             int
 }
 
 // AzureMonitorClients is map of all the AzureMonitorClientCollections that

@@ -9,6 +9,8 @@ import (
 	"net/url"
 	"time"
 
+	"bosun.org/slog"
+
 	"bosun.org/cmd/bosun/expr"
 	"bosun.org/graphite"
 	"bosun.org/opentsdb"
@@ -153,6 +155,7 @@ type AzureMonitorConf struct {
 	TenantId       string
 	ClientId       string
 	ClientSecret   string
+	Concurrency    int
 }
 
 // InfluxConf contains configuration for an influx host that Bosun can query
@@ -562,7 +565,17 @@ func (sc *SystemConf) GetElasticContext() expr.ElasticHosts {
 func (sc *SystemConf) GetAzureMonitorContext() expr.AzureMonitorClients {
 	allClients := make(expr.AzureMonitorClients)
 	for prefix, conf := range sc.AzureMonitorConf {
+		if conf.SubscriptionId == "" || conf.TenantId == "" || conf.ClientId == "" || conf.ClientId == "" {
+			slog.Fatalf("one of required SubscriptionId, TenantId, ClientId, or ClientSecret is not set for Azure client %v", prefix)
+		}
 		clients := expr.AzureMonitorClientCollection{}
+		if conf.Concurrency == 0 {
+			clients.Concurrency = 10
+		} else if conf.Concurrency < 1 {
+			slog.Fatal("value for azure concurrency must be 1 or greater")
+		} else {
+			clients.Concurrency = conf.Concurrency
+		}
 		clients.MetricsClient = insights.NewMetricsClient(conf.SubscriptionId)
 		clients.MetricDefinitionsClient = insights.NewMetricDefinitionsClient(conf.SubscriptionId)
 		clients.ResourcesClient = resources.NewClient(conf.SubscriptionId)
@@ -573,7 +586,7 @@ func (sc *SystemConf) GetAzureMonitorContext() expr.AzureMonitorClients {
 		ccc := auth.NewClientCredentialsConfig(conf.ClientId, conf.ClientSecret, conf.TenantId)
 		at, err := ccc.Authorizer()
 		if err != nil {
-			log.Fatal("azure conf: ", err)
+			slog.Fatal("azure conf: ", err)
 		}
 		clients.MetricsClient.Authorizer, clients.MetricDefinitionsClient.Authorizer, clients.ResourcesClient.Authorizer = at, at, at
 		allClients[prefix] = clients

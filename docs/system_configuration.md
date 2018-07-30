@@ -312,6 +312,11 @@ The Azure Client GUID for the client.
 #### ClientSecret
 The Azure generated secret for tor the client.
 
+#### Concurrency
+For expressions that need to make multiple http requests like `azmulti()`, this sets the amount of concurrent http requests that will be made at a time. In other words, the number of request workers.
+
+This is an optional parameter, If not set the default value is `10`, if set the value must be `1` or greater.
+
 #### Example
 
 ```
@@ -322,6 +327,7 @@ The Azure generated secret for tor the client.
     TenantId = "60730c79-4f4c-4782-9eca-3325638b8f9c"
     ClientId = "2a434dc4-48df-43b8-ad0e-020798bcb36c"
     ClientSecret = "AzureMakes+Aweso//meSecrets="
+    Concurrency = 5
 
 [AzureMonitorConf.foo]
     SubscriptionId = "4b5922c6-0c5a-462f-876f-07072e842ade"
