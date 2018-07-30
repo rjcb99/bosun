@@ -119,7 +119,7 @@ az queries the [Azure Monitor REST API](https://docs.microsoft.com/en-us/rest/ap
 
  `az("Microsoft.Compute/virtualMachines", "Percentage CPU", "", "myResourceGroup", "myFavoriteVM", "avg", "PT5M", "1h", "")`
 
- `az("Microsoft.Compute/virtualMachines", "Per Disk Read Bytes/sec", "SlotId", "myResourceGroup", ""myFavoriteVM", "max", "PT5M", "1h", "")`
+ `az("Microsoft.Compute/virtualMachines", "Per Disk Read Bytes/sec", "SlotId", "myResourceGroup", "myFavoriteVM", "max", "PT5M", "1h", "")`
 
 ### azrt(type string) azureResources
 {: .exprFunc}

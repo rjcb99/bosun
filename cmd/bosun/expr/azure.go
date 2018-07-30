@@ -4,9 +4,12 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"bosun.org/slog"
 
 	"bosun.org/cmd/bosun/expr/parse"
 	"bosun.org/models"
@@ -22,14 +25,14 @@ var AzureMonitor = map[string]parse.Func{
 	"az": {
 		Args:          []models.FuncType{models.TypeString, models.TypeString, models.TypeString, models.TypeString, models.TypeString, models.TypeString, models.TypeString, models.TypeString, models.TypeString},
 		Return:        models.TypeSeriesSet,
-		Tags:          tagFirst, //TODO: Appropriate tags func
+		Tags:          azTags,
 		F:             AzureQuery,
 		PrefixEnabled: true,
 	},
 	"azmulti": {
 		Args:          []models.FuncType{models.TypeString, models.TypeString, models.TypeAzureResourceList, models.TypeString, models.TypeString, models.TypeString, models.TypeString},
 		Return:        models.TypeSeriesSet,
-		Tags:          tagFirst, //TODO: Appropriate tags func
+		Tags:          azMultiTags,
 		F:             AzureMultiQuery,
 		PrefixEnabled: true,
 	},
@@ -53,11 +56,30 @@ var AzureMonitor = map[string]parse.Func{
 	},
 }
 
+// Tag function for the "az" expression function
+func azTags(args []parse.Node) (parse.Tags, error) {
+	return azureTags(args[2])
+}
+
+// Tag function for the "azmulti" expression function
+func azMultiTags(args []parse.Node) (parse.Tags, error) {
+	return azureTags(args[1])
+}
+
+// azureTags adds tags for the csv argument along with the "name" and "rsg" tags
+func azureTags(arg parse.Node) (parse.Tags, error) {
+	tags := parse.Tags{"name": struct{}{}, "rsg": struct{}{}}
+	csvTags := strings.Split(arg.(*parse.StringNode).Text, ",")
+	for _, k := range csvTags {
+		tags[k] = struct{}{}
+	}
+	fmt.Println(tags)
+	return tags, nil
+}
+
 // Azure API References
 // - https://docs.microsoft.com/en-us/azure/monitoring-and-diagnostics/monitoring-supported-metrics
 // - https://docs.microsoft.com/en-us/azure/monitoring-and-diagnostics/monitoring-data-sources
-
-// TODO Auto timegrain/interval: Func that decides the timegrain based on the duration of the span of time between start and end
 
 // TODO Cache
 // - Used different Cache for resource list
@@ -172,7 +194,14 @@ func AzureQuery(prefix string, e *State, T miniprofiler.Timer, namespace, metric
 		return r, err
 	}
 	resp := val.(insights.Response)
-	// Optional todo capture X-Ms-Ratelimit-Remaining-Subscription-Reads
+	rawReadsRemaining := resp.Header.Get("X-Ms-Ratelimit-Remaining-Subscription-Reads")
+	readsRemaining, err := strconv.ParseInt(rawReadsRemaining, 10, 64)
+	if err != nil {
+		slog.Errorf("failure to parse remaning reads from azure response")
+	}
+	if err == nil && readsRemaining < 100 {
+		slog.Warningf("less than 100 reads detected for the azure api on client %v", prefix)
+	}
 	if resp.Value != nil {
 		for _, tsContainer := range *resp.Value {
 			if tsContainer.Timeseries == nil {
