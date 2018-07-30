@@ -9,6 +9,10 @@ import (
 	"sync"
 	"time"
 
+	"bosun.org/metadata"
+
+	"bosun.org/collect"
+
 	"bosun.org/slog"
 
 	"bosun.org/cmd/bosun/expr/parse"
@@ -36,7 +40,7 @@ var AzureMonitor = map[string]parse.Func{
 		F:             AzureMultiQuery,
 		PrefixEnabled: true,
 	},
-	"azmd": {
+	"azmd": { // TODO Finish and document this func
 		Args:          []models.FuncType{models.TypeString, models.TypeString, models.TypeString, models.TypeString},
 		Return:        models.TypeSeriesSet, // TODO return type
 		Tags:          tagFirst,             //TODO: Appropriate tags func
@@ -80,9 +84,8 @@ func azureTags(arg parse.Node) (parse.Tags, error) {
 // - https://docs.microsoft.com/en-us/azure/monitoring-and-diagnostics/monitoring-supported-metrics
 // - https://docs.microsoft.com/en-us/azure/monitoring-and-diagnostics/monitoring-data-sources
 
-// TODO Cache
-// - Used different Cache for resource list
-// - cache metric md?
+// TODO
+// - Finish up azmd info function
 
 const azTimeFmt = "2006-01-02T15:04:05"
 
@@ -206,9 +209,11 @@ func AzureQuery(prefix string, e *State, T miniprofiler.Timer, namespace, metric
 	readsRemaining, err := strconv.ParseInt(rawReadsRemaining, 10, 64)
 	if err != nil {
 		slog.Errorf("failure to parse remaning reads from azure response")
-	}
-	if err == nil && readsRemaining < 100 {
-		slog.Warningf("less than 100 reads detected for the azure api on client %v", prefix)
+	} else {
+		collect.Sample("azure.remaining_reads", opentsdb.TagSet{"prefix": prefix}, float64(readsRemaining))
+		if readsRemaining < 100 {
+			slog.Warningf("less than 100 reads detected for the Azure api on client %v", prefix)
+		}
 	}
 	if resp.Value != nil {
 		for _, tsContainer := range *resp.Value {
@@ -517,4 +522,9 @@ func azureShortAggToLong(agtype string) (string, error) {
 func azureIntervalToTimegrain(s string) *string {
 	tg := fmt.Sprintf("PT%v", strings.ToUpper(s))
 	return &tg
+}
+
+func init() {
+	metadata.AddMetricMeta("bosun.azure.remaining_reads", metadata.Gauge, metadata.Operation,
+		"A Sampling of the number of remaining reads to the Azure API before being ratelimited.")
 }

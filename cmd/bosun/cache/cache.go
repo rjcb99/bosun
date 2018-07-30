@@ -20,7 +20,7 @@ func New(MaxEntries int) *Cache {
 	}
 }
 
-func (c *Cache) Get(key string, getFn func() (interface{}, error)) (interface{}, error) {
+func (c *Cache) Get(key string, getFn func() (interface{}, error)) (interface{}, error, bool) {
 	if c == nil {
 		return getFn()
 	}
@@ -28,7 +28,7 @@ func (c *Cache) Get(key string, getFn func() (interface{}, error)) (interface{},
 	result, ok := c.lru.Get(key)
 	c.Unlock()
 	if ok {
-		return result, nil
+		return result, nil, true
 	}
 	// our lock only serves to protect the lru.
 	// we can (and should!) do singleflight requests concurently
@@ -40,5 +40,5 @@ func (c *Cache) Get(key string, getFn func() (interface{}, error)) (interface{},
 			c.Unlock()
 		}
 		return v, err
-	})
+	}), false
 }
